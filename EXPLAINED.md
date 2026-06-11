@@ -17,15 +17,24 @@ command in this project's history was one of these. A few you'll use constantly:
 - `cd <folder>` — move into a folder; `cd ..` moves up one
 - `pwd` — print which folder you're currently in
 
-### Homebrew (`brew`)
-The "app store" for developer tools on a Mac, run from the terminal. Apple doesn't ship
-modern versions of programming tools, so almost every Mac developer installs Homebrew
-first, then uses `brew install <thing>` to get everything else.
+### Homebrew (`brew`) — and why we DIDN'T end up using it
+The "app store" for developer tools on a Mac. We planned to use it, but installing it
+requires an **administrator** account password, and this Mac account isn't an admin (the
+admin is probably a parent's account). Instead we used **`uv`** (below). The only thing
+we'll genuinely need admin help for is installing `ngspice` in Phase 4, months from now.
+
+### uv — what we used instead
+A modern, very fast Python manager that installs entirely inside your own user folder
+(`~/.local/bin`), so it never needs an admin password. One command
+(`uv venv --python 3.12`) made it download a standalone Python 3.12.13 AND create our
+project's virtual environment. `uv pip install <libs>` then installed all our libraries
+in seconds.
 
 ### Python and why we didn't use the one already on your Mac
 Your Mac came with Python 3.9.6 (released 2021). It's owned by Apple's system — installing
 project libraries into it can break system stuff, and several of our libraries want a
-newer Python anyway. So we install Python 3.12 with Homebrew and leave Apple's copy alone.
+newer Python anyway. So uv downloaded us a private Python 3.12 and Apple's copy stays
+untouched.
 
 ### Virtual environment (`.venv` folder)
 A private copy of Python + libraries that belongs to *this project only*. When we
@@ -36,7 +45,9 @@ delete and recreate it anytime, which is also why git ignores it.
 
 ### pip
 Python's library installer. `pip install numpy` downloads the numpy library into the
-active environment so `import numpy` works in our code.
+active environment so `import numpy` works in our code. (We run it through uv as
+`uv pip install`, which does the same thing but faster.) The project's library list
+lives in `requirements.txt`, so anyone can recreate the environment with one command.
 
 ### git
 A save-point system for code. A **commit** is a named snapshot of every file at a moment

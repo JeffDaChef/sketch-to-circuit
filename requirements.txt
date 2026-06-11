@@ -1,0 +1,6 @@
+# Phase 0 dependencies — install with: uv pip install -r requirements.txt
+schemdraw
+numpy
+networkx
+matplotlib
+pytest

@@ -234,6 +234,151 @@ empty list.' Then come its methods — the things a netlist can do:"
   it into four pieces, take the kind from the first letter of the name, and `add` it."*
   Lets us write test circuits as plain text.
 
+### `solver/mna.py` — the circuit solver (the centerpiece)
+
+**Conceptual intro (read once, then skip):** The unknowns in any circuit are the
+voltages at the junctions ("nodes"). Two laws give us enough equations to find them:
+**Ohm's law** (current through a resistor = voltage across it ÷ resistance) and
+**Kirchhoff's Current Law** (at every node, the currents flowing in equal the currents
+flowing out). Writing KCL at every node, with each current rewritten via Ohm's law in
+terms of the unknown voltages, produces one equation per node. We pack those equations
+into a matrix `A` and a vector `z`, and the solution of `A · x = z` is the list of
+node voltages. "**Modified** nodal analysis" just means we add one extra unknown and one
+extra equation for each voltage source (a source fixes a voltage, which Ohm's law can't
+express). This is the actual algorithm inside SPICE.
+
+**Now the code, translated top-to-bottom:**
+
+**Block 1 — imports.**
+```python
+from dataclasses import dataclass
+import numpy as np
+from solver.netlist import GROUND, Netlist
+```
+*In English:* "Pull in `dataclass` (for the result record), `numpy` as `np` (the matrix
+math library that actually solves the equations), and the `GROUND` constant and
+`Netlist` type from our own netlist module — so the solver speaks the same language the
+rest of the project does."
+
+**Block 2 — the `SolverError` type.** *"Our own labelled error, raised when a circuit
+can't be solved (no ground, floating node, etc.) — same pattern as `NetlistError`."*
+
+**Block 3 — the `SolveResult` record.**
+```python
+@dataclass
+class SolveResult:
+    node_voltages: dict[str, float]
+    source_currents: dict[str, float]
+    branch_currents: dict[str, float]
+    def voltage(self, net): ...
+    def __str__(self): ...
+```
+*In English:* "Define the shape of the answer. It holds three lookup tables: the voltage
+at every net, the current through every voltage source, and the current through every
+resistor/current-source. `voltage(net)` is a shortcut to read one voltage.
+`__str__` builds the pretty multi-line printout you see in the smoke demo."
+
+**Block 4 — `solve(netlist)` starts: the sanity checks.**
+```python
+if not netlist.has_ground():
+    raise SolverError("circuit has no ground ...")
+for c in netlist.components:
+    if c.kind == "D":
+        raise SolverError(f"{c.name}: diodes ... aren't supported yet")
+```
+*In English:* "Before building anything, bail out early on circuits we can't handle:
+one with no ground (no reference point for voltage), or one containing a diode (those
+are non-linear — a later phase). Failing fast with a clear message beats producing
+nonsense."
+
+**Block 5 — decide what the unknowns are.**
+```python
+nodes = netlist.node_names()
+node_index = {name: i for i, name in enumerate(nodes)}
+n = len(nodes)
+vsources = [c for c in netlist.components if c.kind == "V"]
+vsource_index = {c.name: n + k for k, c in enumerate(vsources)}
+m = len(vsources)
+size = n + m
+A = np.zeros((size, size))
+z = np.zeros(size)
+```
+*In English:* "List the non-ground nodes and give each a row number (`node_index`); that
+count is `n`. List the voltage sources and give each its OWN row number, placed after
+the node rows (`vsource_index`); that count is `m`. The total number of unknowns/equations
+is `size = n + m`. Create an all-zeros matrix `A` of that size and an all-zeros vector
+`z` — we'll fill them in by 'stamping' each component."
+
+**Block 6 — stamp resistors and current sources into the node equations.**
+```python
+for c in netlist.components:
+    if c.kind == "R":
+        g = 1.0 / c.value
+        a, b = c.nodes
+        if a != GROUND: A[node_index[a], node_index[a]] += g
+        if b != GROUND: A[node_index[b], node_index[b]] += g
+        if a != GROUND and b != GROUND:
+            A[node_index[a], node_index[b]] -= g
+            A[node_index[b], node_index[a]] -= g
+    elif c.kind == "I":
+        a, b = c.nodes
+        if a != GROUND: z[node_index[a]] -= c.value
+        if b != GROUND: z[node_index[b]] += c.value
+```
+*In English:* "Walk every component. For a **resistor**, compute its conductance
+`g = 1/R`, then add `+g` to each of its two nodes' diagonal spots and `-g` to the two
+spots linking them — this is KCL+Ohm written into the matrix. Skip any stamp aimed at
+ground, because ground has no row. For a **current source**, it forces a fixed current,
+which goes on the right-hand side `z`: drain the + node (`-value`), feed the - node
+(`+value`). Capacitors fall through and do nothing (open at DC)."
+
+**Block 7 — stamp the voltage sources (the 'modified' part).**
+```python
+for c in vsources:
+    s = vsource_index[c.name]
+    p, q = c.nodes
+    if p != GROUND: A[node_index[p], s] += 1; A[s, node_index[p]] += 1
+    if q != GROUND: A[node_index[q], s] -= 1; A[s, node_index[q]] -= 1
+    z[s] = c.value
+```
+*In English:* "For each voltage source, look up its dedicated row `s`. Put `+1` where its
++ node meets that row/column and `-1` where its - node does. Those entries do two jobs at
+once: they inject the source's unknown current into the two nodes' KCL equations, and
+they state the rule 'V(+node) − V(−node) = value'. Put that `value` into `z` at row `s`."
+
+**Block 8 — solve the system.**
+```python
+try:
+    x = np.linalg.solve(A, z)
+except np.linalg.LinAlgError as err:
+    raise SolverError("circuit is unsolvable (singular matrix) ...") from err
+```
+*In English:* "Hand the finished matrix and vector to numpy; `np.linalg.solve` returns
+`x`, the vector of all unknowns, in one step. If numpy says the matrix is 'singular'
+(no unique solution), translate that into a friendly `SolverError` explaining the likely
+cause — a floating node or a short."
+
+**Block 9 — unpack the answer into named results.**
+```python
+node_voltages = {GROUND: 0.0}
+for name, i in node_index.items():
+    node_voltages[name] = float(x[i])
+source_currents = {c.name: float(x[vsource_index[c.name]]) for c in vsources}
+branch_currents = {}
+for c in netlist.components:
+    if c.kind == "R":
+        va, vb = node_voltages[c.nodes[0]], node_voltages[c.nodes[1]]
+        branch_currents[c.name] = (va - vb) / c.value
+    elif c.kind == "I":
+        branch_currents[c.name] = c.value
+return SolveResult(node_voltages, source_currents, branch_currents)
+```
+*In English:* "Translate the raw numbers in `x` back into named results. Ground is exactly
+0. Each node row of `x` becomes that net's voltage; each source row becomes that source's
+current. Then compute resistor currents from the voltages we just found (Ohm's law again:
+`(Va − Vb)/R`) — these drive the current-arrow overlay later. Bundle everything into a
+`SolveResult` and return it."
+
 ### `tests/` + `conftest.py` — how we know the code works
 
 `tests/test_netlist.py` contains 11 small functions, each named `test_...`, each

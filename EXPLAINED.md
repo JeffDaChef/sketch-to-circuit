@@ -340,6 +340,35 @@ test runner where the project begins, so the tests can find the `solver` code.
 
 ---
 
+## File 4 — `demo.py` — the end-to-end proof
+
+**Where this fits in the pipeline:** not a station — a demonstration that the whole back
+half of the belt works as one connected machine.
+
+**What feeds in / what it feeds:** it pulls together all three built files — it builds
+netlists (File 1), solves them (File 2), and generates a fresh circuit (File 3) — and
+prints the results for a human to read.
+
+**How it works, move by move:**
+
+- First I'm importing the netlist type, the solve routine, and the generator's
+  make-one-circuit routine — so this one script can reach every piece we've built.
+
+- Now I'm running the **hand-built demo**: I construct a simple 12-volt divider with a
+  1k and a 3k resistor by adding components one at a time, solve it, and print the
+  voltages. I also print the paper answer (the output should be nine volts) right next to
+  the solver's answer, so anyone can confirm by eye that the engine is telling the truth.
+
+- Now I'm running the **generated demo**, which proves the loop closes. I ask the
+  generator for one fresh random circuit; it hands back an image and an answer key. I take
+  the circuit-as-text out of that answer key, **read it back into a brand-new netlist**,
+  and solve *that* independently. Because the re-solved voltages match the ones the
+  generator already stored, this shows three things at once: the generator builds correct
+  circuits, the text format survives a round trip, and the solver agrees with itself across
+  two different paths into it.
+
+- Finally it prints a one-line confirmation that the Phase-0 spine holds together.
+
 ## Where the build stands
 
 Built and tested: the netlist (File 1), the solver (File 2), and the generator (File 3).

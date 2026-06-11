@@ -25,7 +25,7 @@ Input drawing rules: [`docs/drawing_convention.md`](docs/drawing_convention.md)
 ## Status
 
 - [x] Project brief & plan
-- [ ] **Phase 0 (in progress):** synthetic pipeline — generator + netlist + MNA solver
+- [x] **Phase 0:** synthetic pipeline — netlist + MNA solver + generator + end-to-end demo (22 tests passing)
 - [ ] Phase 1: train YOLO detector on CGHD dataset
 - [ ] Phase 2: real hand-drawn photos through the pipeline
 - [ ] Phase 3: live camera + overlay

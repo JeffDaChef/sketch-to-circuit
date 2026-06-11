@@ -1,391 +1,351 @@
-# EXPLAINED.md — what every piece of this project does, in plain English
+# EXPLAINED.md — the whole project, in plain English
 
-This file is the running "textbook" of the project. Every time code gets written, a
-section gets added here explaining **what was built, what every function does, and what
-the big chunks of code actually do** — no jargon without a definition. Read it top to
-bottom and you should understand the whole repo.
+This is the project's "textbook." It explains **how the system is built and how to think
+while building it** — not the syntax. You won't find code here. Each file is described
+twice over: first *where it sits in the bigger machine and what connects to it*, then a
+walk through its logic as a sequence of plain-English moves ("now I'm doing this, because…").
+When one file leans on another, it's called out explicitly, because the most important
+thing to understand is **how the pieces talk to each other.**
 
----
-
-## Part 1 — The tools (the stuff around the code)
-
-### The terminal
-A text-based way to control your computer. Instead of clicking icons, you type commands
-like `ls` ("list the files here") or `cd solver` ("go into the solver folder"). Every
-command in this project's history was one of these. A few you'll use constantly:
-- `ls` — list files in the current folder (`ls -a` includes hidden ones)
-- `cd <folder>` — move into a folder; `cd ..` moves up one
-- `pwd` — print which folder you're currently in
-
-### Homebrew (`brew`) — and why we DIDN'T end up using it
-The "app store" for developer tools on a Mac. We planned to use it, but installing it
-requires an **administrator** account password, and this Mac account isn't an admin (the
-admin is probably a parent's account). Instead we used **`uv`** (below). The only thing
-we'll genuinely need admin help for is installing `ngspice` in Phase 4, months from now.
-
-### uv — what we used instead
-A modern, very fast Python manager that installs entirely inside your own user folder
-(`~/.local/bin`), so it never needs an admin password. One command
-(`uv venv --python 3.12`) made it download a standalone Python 3.12.13 AND create our
-project's virtual environment. `uv pip install <libs>` then installed all our libraries
-in seconds.
-
-### Python and why we didn't use the one already on your Mac
-Your Mac came with Python 3.9.6 (released 2021). It's owned by Apple's system — installing
-project libraries into it can break system stuff, and several of our libraries want a
-newer Python anyway. So uv downloaded us a private Python 3.12 and Apple's copy stays
-untouched.
-
-### Virtual environment (`.venv` folder)
-A private copy of Python + libraries that belongs to *this project only*. When we
-"activate" it, `python` and `pip` point at the project's toolbox instead of the global
-one. Why: two projects on your computer might need different versions of the same
-library — venvs stop them from fighting. The `.venv/` folder is disposable; you can
-delete and recreate it anytime, which is also why git ignores it.
-
-### pip
-Python's library installer. `pip install numpy` downloads the numpy library into the
-active environment so `import numpy` works in our code. (We run it through uv as
-`uv pip install`, which does the same thing but faster.) The project's library list
-lives in `requirements.txt`, so anyone can recreate the environment with one command.
-
-### git
-A save-point system for code. A **commit** is a named snapshot of every file at a moment
-in time — you can always look back at (or restore) any commit. We commit after every
-working chunk, so the project history shows real incremental progress. Key commands:
-- `git status` — what changed since the last save-point?
-- `git add -A` — stage all changes ("put them in the box")
-- `git commit -m "message"` — seal the box with a description
-- `git log --oneline` — list all save-points
-
-`.gitignore` is a list of files git should *never* track: the venv (recreatable),
-`__pycache__` (Python's auto-generated junk), `.DS_Store` (invisible macOS metadata
-files), and generated images.
-
-### The libraries we're installing (and why)
-| Library | What it's for here |
-|---|---|
-| `schemdraw` | Draws circuit schematics programmatically → our synthetic test images |
-| `numpy` | Fast matrix math → the heart of the MNA circuit solver |
-| `networkx` | Graph algorithms → later, checking extracted circuits match ground truth |
-| `matplotlib` | The rendering engine schemdraw uses to make PNGs |
-| `pytest` | Test runner: finds functions named `test_*` and runs them, reporting pass/fail |
+Read it top to bottom and you'll understand the reasoning behind every part we've built.
 
 ---
 
-## Part 2 — The repo layout
+## The big picture: the conveyor belt
 
-| Path | What it is |
-|---|---|
-| `README.md` | Front page: what the project is + build status checklist |
-| `EXPLAINED.md` | This file |
-| `sketch_to_circuit_brief.md` | The full project spec/plan |
-| `docs/drawing_convention.md` | The input rules every drawing must follow (this constraint is what makes the vision problem solvable) |
-| `data_collection/` | Synthetic schematic generator; later, dataset prep |
-| `training/` | (empty for now) YOLO detector training — Phase 1 |
-| `vision/` | (empty for now) camera, preprocessing, wire tracing — Phases 2–3 |
-| `solver/` | Circuit math: netlist data structures + MNA solver |
-| `ui/` | (empty for now) live overlay — Phase 3 |
-| `tests/` | Unit tests — small programs that check our code gives known-correct answers |
+The finished system is a conveyor belt. A photo of a hand-drawn circuit goes in one end,
+and each station transforms it into something closer to a solved, annotated circuit:
+
+1. **Camera** grabs a frame of the paper.
+2. **Flatten & clean** the image (correct the camera angle, turn it into crisp black-on-white).
+3. **Detect components** — find the resistors, batteries, etc. *(this is the trained AI part)*.
+4. **Trace the wires** connecting those components.
+5. **Build the netlist** — write the circuit down as data.
+6. **Read the values** off the handwriting ("10k", "5V").
+7. **Solve the circuit** — compute the voltage at every junction *(the math engine)*.
+8. **Overlay the answers** back onto the live video, and explain the circuit in English.
+
+We are deliberately building the **back half first** (stations 5 and 7), using fake
+computer-drawn circuits where we already know the right answer. That lets us build and
+*prove* the hard math today, with no camera and no AI training. When the trained detector
+arrives later, it plugs into a back end that already works.
+
+**What's built so far (Phase 0):** the netlist (station 5), the solver (station 7), and a
+generator that produces fake circuits to test them with. Those three are what this
+document currently covers.
 
 ---
 
-## Part 3 — The code
+## Stage 0 — Setting up the workshop
 
-### `solver/netlist.py` — describing a circuit in software
+Before any project code, the computer needed the right tools. None of this is part of the
+circuit system; it's the workbench everything else is built on.
 
-**The big idea:** before we can solve or even detect circuits, we need a way to *write
-one down* as data. The standard way (used by every circuit simulator since the 1970s,
-including SPICE) is a **netlist**: a parts list where each part says which **nets** it
-touches. A *net* is one connected blob of wire — every point on it is electrically
-identical, so it gets one name. Ground is always net `"0"` (SPICE tradition).
+- **The terminal** is a way to drive the computer by typing commands instead of clicking.
+  Every setup step was one typed command.
+- **Apple's built-in Python was too old**, and you should never install project tools into
+  the system's own copy (it can break the operating system). So we needed a fresh, private
+  Python.
+- **Homebrew** is the usual Mac tool for installing developer software, but installing *it*
+  needs an administrator password, and this Mac account isn't an administrator. So we used
+  **uv** instead — a fast tool that installs everything inside your own user folder, no
+  admin needed. With one command it downloaded a private **Python 3.12** and built a
+  **virtual environment** (a sealed toolbox of libraries that belongs to this project
+  alone, so it can never clash with anything else on the machine).
+- Into that toolbox we installed five libraries: **schemdraw** (draws circuit diagrams),
+  **numpy** (fast matrix math — the engine of the solver), **networkx** (graph math, for a
+  later phase), **matplotlib** (the rendering engine schemdraw draws onto), and **pytest**
+  (runs our tests).
+- **git** is a save-point system. Every working chunk gets "committed" — frozen as a named
+  snapshot you can always return to. The chain of commits is a real, honest record of the
+  work building up over time. A `.gitignore` file lists junk that shouldn't be saved (the
+  toolbox, generated images, hidden Mac files).
 
-Example — a 10V battery feeding two 1kΩ resistors in series:
-```
-V1 in 0 10        ← voltage source between net "in" and ground
-R1 in mid 1000    ← resistor from "in" to "mid"
-R2 mid 0 1000     ← resistor from "mid" to ground
-```
-That text IS the circuit. Drawing position, wire routing — none of it matters
-electrically; only the connections do.
+**The repo layout:** `solver/` holds the circuit math, `data_collection/` holds the fake-
+circuit generator, `tests/` holds the checks, `docs/` holds the drawing-rules spec, and
+the folders `vision/`, `training/`, `ui/` are empty placeholders for later phases.
 
-**Now the code itself, translated top-to-bottom.** Open `solver/netlist.py` next to
-this and read them together — each block below is the same block in the file, in the
-same order, said in English.
+---
 
-**Block 1 — the imports (top of file).**
-```python
-from __future__ import annotations
-import re
-from dataclasses import dataclass, field
-```
-*In English:* "Bring in three tools before we start. `from __future__ import
-annotations` lets us write modern type hints like `tuple[str, str]` even on slightly
-older Python. `re` is Python's regular-expression toolkit — pattern-matching on text,
-which `parse_value` needs. `dataclass` and `field` are shortcuts for making
-record-style objects without writing boilerplate."
+## File 1 — `solver/netlist.py` — describing a circuit as data
 
-**Block 2 — the constants `KINDS` and `GROUND`.**
-```python
-KINDS = {"R": "resistor", "C": "capacitor", "V": "voltage source", ...}
-GROUND = "0"
-```
-*In English:* "Define the list of component types we allow, as a dictionary mapping a
-one-letter code to a human name. Anything not in here will be rejected later. Also fix
-the name of the ground net as the string `"0"` once, so the rest of the file can refer
-to `GROUND` instead of hardcoding `"0"` everywhere."
+**Where this fits in the pipeline:** Station 5. It defines the *shared language* the whole
+project speaks — the way any circuit is written down as data.
 
-**Block 3 — our own error type.**
-```python
-class NetlistError(Exception): ...
-```
-*In English:* "Make a custom error labelled `NetlistError`. When something is wrong with
-a circuit or a value, we'll *raise* this. Having our own named error means tests and
-callers can catch specifically *our* circuit errors and not get them confused with
-unrelated Python errors."
+**What feeds in / what it feeds:** Later, the wire-tracer (station 4) will *produce* these
+netlist objects from a photo. Right now, the generator (File 3) and our tests produce them
+by hand. Everything downstream — above all the solver (File 2) — *consumes* them. So this
+file is the hinge the whole project turns on.
 
-**Block 4 — the multiplier table and the three regex patterns.**
-```python
-_MULTIPLIERS = {"k": 1e3, "M": 1e6, "m": 1e-3, "u": 1e-6, ...}
-_UNIT_SUFFIX = re.compile(r"(ohms?|Ω|[VvAaFf])$")
-_PLAIN  = re.compile(r"^(\d+\.?\d*|\.\d+)(MEG|meg|[TGkKmMuµnp])?$")
-_INFIX  = re.compile(r"^(\d+)(MEG|meg|[TGkKmMuµnp])(\d+)$")
-```
-*In English:* "Set up the lookup data for reading written values. `_MULTIPLIERS` says
-what each engineering letter multiplies by (`k` = ×1000, `u` = ÷1,000,000, etc.). The
-three `re.compile(...)` lines pre-build text patterns we'll reuse: `_UNIT_SUFFIX`
-matches a trailing unit like `V`, `A`, `F`, or `Ω` at the end of a string; `_PLAIN`
-matches 'a number, optionally followed by one multiplier letter' (the `10k` shape);
-`_INFIX` matches 'digits, a multiplier letter, then more digits' (the `4u7` shape,
-where the letter stands in for the decimal point). The leading underscore on these
-names is a convention meaning 'internal — not meant to be used outside this file.'"
+**The core idea first:** a circuit is just a parts list plus wiring. Each part says what it
+is, what it's worth, and which two *nets* it touches. A "net" is one connected blob of
+wire — every point on it is electrically the same, so it gets a single name. Ground (the
+reference point we measure all voltages against) is always the net named "0". Where things
+are drawn on the page doesn't matter electrically; only what connects to what.
 
-**Block 5 — `parse_value(text)`, the value reader.**
-```python
-def parse_value(text: str) -> float:
-    token = text.strip().replace(" ", "")
-    if not token: raise NetlistError("empty value")
-    stripped = _UNIT_SUFFIX.sub("", token)
-    if stripped and (...): token = stripped
-    m = _INFIX.match(token)
-    if m: ... return float(f"{whole}.{frac}") * _MULTIPLIERS[...]
-    m = _PLAIN.match(token)
-    if m: ... return float(number) * scale
-    raise NetlistError(f"can't parse component value: {text!r}")
-```
-*In English, step by step (this is exactly the order the code runs):*
-1. "Clean up the input: remove surrounding spaces and any spaces inside. Call the
-   result `token`."
-2. "If there's nothing left, that's an error — stop and raise `NetlistError`."
-3. "Try to chop a trailing unit off the end (`5V` → `5`). Only actually use the chopped
-   version if what's left still ends in a digit or a multiplier, so we don't accidentally
-   ruin a plain number."
-4. "Test the `4u7` infix shape first. If it matches, glue the two digit-groups back
-   together around a decimal point (`4` and `7` → `4.7`) and multiply by the letter's
-   value from `_MULTIPLIERS`. Return that number."
-5. "Otherwise test the plain `10k` shape. If it matches, take the number part, multiply
-   by the multiplier if there is one, and return it."
-6. "If neither shape matched, we don't understand the input — raise `NetlistError` with
-   the original text so the message is useful." *(This same function is the safety net
-   behind the handwriting-OCR module later.)*
+**How it's built, move by move:**
 
-**Block 6 — the `Component` record.**
-```python
-@dataclass
-class Component:
-    kind: str
-    name: str
-    value: float
-    nodes: tuple[str, str]
-    def __post_init__(self): ...validate...
-```
-*In English:* "`@dataclass` tells Python: this class is just a record holding these four
-named fields, so auto-write the boring setup code for me. A `Component` holds its `kind`
-(one of the `KINDS` codes), its `name` like `'R1'`, its `value` as a plain number, and
-`nodes`, the pair of net names its two ends touch. The `__post_init__` method runs
-automatically right after a Component is created and checks the data is sane — kind must
-be known, and there must be exactly two nodes — raising `NetlistError` if not. Node
-order matters: for a source, the first node is the `+` terminal."
+- First I'm pulling in a couple of small built-in tools: one for **pattern-matching text**
+  (I'll need it to read written values like "10k"), and one shorthand for making tidy
+  **labeled records** without busywork.
 
-**Block 7 — the `Netlist` container and its methods.**
-```python
-@dataclass
-class Netlist:
-    components: list[Component] = field(default_factory=list)
-```
-*In English:* "A `Netlist` is the whole circuit: mainly a list of `Component`s. The
-`field(default_factory=list)` part means 'each new Netlist starts with its own fresh
-empty list.' Then come its methods — the things a netlist can do:"
-- **`add(kind, name, value, node_a, node_b)`** — *"Add one component to the circuit.
-  First refuse if the name is already taken. If the value came in as a string like
-  `'10k'`, run it through `parse_value` to get a number. Build the `Component`, append
-  it to the list, and hand it back."* This is the method the rest of the project calls
-  to build circuits.
-- **`node_names()`** — *"Collect every net name mentioned by any component, throw out
-  ground, and return them sorted."* The solver calls this to learn what the unknown
-  voltages are.
-- **`has_ground()`** — *"Return true if any component touches net `'0'`."* A circuit
-  with no ground has no voltage reference, so the solver checks this first.
-- **`to_spice(title)`** — *"Write the circuit out as standard SPICE text: a title
-  line, then one line per component (`name nodeA nodeB value`), then `.end`."* Lets us
-  save circuits and feed them to the real ngspice in Phase 4.
-- **`from_spice(text)`** — *"The reverse: read SPICE text back into a Netlist. Skip
-  blank lines, comment lines starting with `*`, and `.end`. For every real line, split
-  it into four pieces, take the kind from the first letter of the name, and `add` it."*
-  Lets us write test circuits as plain text.
+- Now I'm writing down the **list of component types** the project allows — resistor,
+  capacitor, voltage source, current source, diode — as a lookup from a one-letter code to
+  a human name. Anything not on this list will be rejected later. I'm also fixing the name
+  of the **ground net as "0"**, once, so the rest of the code refers to a single shared
+  constant instead of scattering "0" everywhere.
 
-### `solver/mna.py` — the circuit solver (the centerpiece)
+- Now I'm defining my **own kind of error** for circuit problems. When something is wrong —
+  a value that can't be read, an unknown component — I'll raise this. Having a custom,
+  clearly-named error means the tests and the rest of the program can recognize *our*
+  circuit problems specifically, and not confuse them with unrelated computer errors.
 
-**Conceptual intro (read once, then skip):** The unknowns in any circuit are the
-voltages at the junctions ("nodes"). Two laws give us enough equations to find them:
-**Ohm's law** (current through a resistor = voltage across it ÷ resistance) and
-**Kirchhoff's Current Law** (at every node, the currents flowing in equal the currents
-flowing out). Writing KCL at every node, with each current rewritten via Ohm's law in
-terms of the unknown voltages, produces one equation per node. We pack those equations
-into a matrix `A` and a vector `z`, and the solution of `A · x = z` is the list of
-node voltages. "**Modified** nodal analysis" just means we add one extra unknown and one
-extra equation for each voltage source (a source fixes a voltage, which Ohm's law can't
-express). This is the actual algorithm inside SPICE.
+- Now I'm setting up the data I need to **read written values**. There's a table saying
+  what each engineering letter multiplies by — "k" means times a thousand, "u" means
+  divide by a million, and so on. And there are three text patterns I prepare in advance
+  and reuse: one that spots a trailing unit like "V" or "F" at the end, one that matches a
+  plain value such as "10k", and one that matches the European style where the letter sits
+  in the middle and stands in for the decimal point, like "4u7" meaning 4.7 millionths.
 
-**Now the code, translated top-to-bottom:**
+- Now I'm writing the **value reader** itself — the single most reused little routine in
+  the project. It runs in a deliberate order. First it cleans the text by removing spaces.
+  If nothing is left, that's an error and it stops. Then it tries to chop off a trailing
+  unit, but only if doing so still leaves a sensible number, so it never mangles a plain
+  digit. Then it tests the "4u7" middle-letter shape first; if that matches, it rebuilds
+  the number around a decimal point and scales it by the letter's multiplier. Otherwise it
+  tests the ordinary "10k" shape and scales that. If neither shape fits, it gives up loudly
+  with a clear error rather than guessing. *This same reader will later be the safety net
+  behind the handwriting-recognition station (station 6), which is why it's careful and
+  lives here in the shared language.*
 
-**Block 1 — imports.**
-```python
-from dataclasses import dataclass
-import numpy as np
-from solver.netlist import GROUND, Netlist
-```
-*In English:* "Pull in `dataclass` (for the result record), `numpy` as `np` (the matrix
-math library that actually solves the equations), and the `GROUND` constant and
-`Netlist` type from our own netlist module — so the solver speaks the same language the
-rest of the project does."
+- Now I'm defining what **one component** looks like as a record: its type, its name like
+  "R1", its value as a plain number, and the pair of net names its two ends touch. The
+  order of those two ends carries meaning for sources — the first one is the "+" terminal.
+  The moment a component is created it checks itself: the type must be on the allowed list,
+  and there must be exactly two ends. If not, it raises the custom error immediately, so
+  bad data can't travel any further into the system.
 
-**Block 2 — the `SolverError` type.** *"Our own labelled error, raised when a circuit
-can't be solved (no ground, floating node, etc.) — same pattern as `NetlistError`."*
+- Now I'm defining the **whole circuit** as a container that mainly holds a list of those
+  components, and giving it the handful of things a circuit needs to be able to do:
+  - **Add a component.** It refuses a duplicate name, and if the value arrived as text like
+    "10k" it quietly runs it through the value reader from earlier so the stored value is
+    always a real number. This is the one method the rest of the project calls to build a
+    circuit up piece by piece.
+  - **List the nodes.** It gathers every net name mentioned by any component, drops ground,
+    and returns the rest in order. *The solver calls this to learn exactly what the unknown
+    voltages are* — so this method is the bridge into File 2.
+  - **Check there's a ground.** It reports whether anything touches net "0". A circuit with
+    no ground has no reference point, so the solver checks this before doing anything.
+  - **Write the circuit out as standard text**, and **read it back in.** This is the same
+    plain-text format the professional simulator uses — one line per component. Having it
+    means we can save circuits to files, hand them to the real simulator for cross-checking
+    in a later phase, and write test circuits by hand as plain text.
 
-**Block 3 — the `SolveResult` record.**
-```python
-@dataclass
-class SolveResult:
-    node_voltages: dict[str, float]
-    source_currents: dict[str, float]
-    branch_currents: dict[str, float]
-    def voltage(self, net): ...
-    def __str__(self): ...
-```
-*In English:* "Define the shape of the answer. It holds three lookup tables: the voltage
-at every net, the current through every voltage source, and the current through every
-resistor/current-source. `voltage(net)` is a shortcut to read one voltage.
-`__str__` builds the pretty multi-line printout you see in the smoke demo."
+---
 
-**Block 4 — `solve(netlist)` starts: the sanity checks.**
-```python
-if not netlist.has_ground():
-    raise SolverError("circuit has no ground ...")
-for c in netlist.components:
-    if c.kind == "D":
-        raise SolverError(f"{c.name}: diodes ... aren't supported yet")
-```
-*In English:* "Before building anything, bail out early on circuits we can't handle:
-one with no ground (no reference point for voltage), or one containing a diode (those
-are non-linear — a later phase). Failing fast with a clear message beats producing
-nonsense."
+## File 2 — `solver/mna.py` — the circuit solver (the centerpiece)
 
-**Block 5 — decide what the unknowns are.**
-```python
-nodes = netlist.node_names()
-node_index = {name: i for i, name in enumerate(nodes)}
-n = len(nodes)
-vsources = [c for c in netlist.components if c.kind == "V"]
-vsource_index = {c.name: n + k for k, c in enumerate(vsources)}
-m = len(vsources)
-size = n + m
-A = np.zeros((size, size))
-z = np.zeros(size)
-```
-*In English:* "List the non-ground nodes and give each a row number (`node_index`); that
-count is `n`. List the voltage sources and give each its OWN row number, placed after
-the node rows (`vsource_index`); that count is `m`. The total number of unknowns/equations
-is `size = n + m`. Create an all-zeros matrix `A` of that size and an all-zeros vector
-`z` — we'll fill them in by 'stamping' each component."
+**Where this fits in the pipeline:** Station 7, the math engine — the single most important
+and most impressive part of the project. It's the same core algorithm that runs inside
+SPICE, the industry-standard circuit simulator, written here from scratch.
 
-**Block 6 — stamp resistors and current sources into the node equations.**
-```python
-for c in netlist.components:
-    if c.kind == "R":
-        g = 1.0 / c.value
-        a, b = c.nodes
-        if a != GROUND: A[node_index[a], node_index[a]] += g
-        if b != GROUND: A[node_index[b], node_index[b]] += g
-        if a != GROUND and b != GROUND:
-            A[node_index[a], node_index[b]] -= g
-            A[node_index[b], node_index[a]] -= g
-    elif c.kind == "I":
-        a, b = c.nodes
-        if a != GROUND: z[node_index[a]] -= c.value
-        if b != GROUND: z[node_index[b]] += c.value
-```
-*In English:* "Walk every component. For a **resistor**, compute its conductance
-`g = 1/R`, then add `+g` to each of its two nodes' diagonal spots and `-g` to the two
-spots linking them — this is KCL+Ohm written into the matrix. Skip any stamp aimed at
-ground, because ground has no row. For a **current source**, it forces a fixed current,
-which goes on the right-hand side `z`: drain the + node (`-value`), feed the - node
-(`+value`). Capacitors fall through and do nothing (open at DC)."
+**What feeds in / what it feeds:** It *takes in* a netlist (File 1) and *gives back* the
+voltage at every node plus the currents. The generator (File 3) calls it to fill in the
+answer key for each fake circuit; later, the live overlay (station 8) will call it every
+time you change a value on the paper.
 
-**Block 7 — stamp the voltage sources (the 'modified' part).**
-```python
-for c in vsources:
-    s = vsource_index[c.name]
-    p, q = c.nodes
-    if p != GROUND: A[node_index[p], s] += 1; A[s, node_index[p]] += 1
-    if q != GROUND: A[node_index[q], s] -= 1; A[s, node_index[q]] -= 1
-    z[s] = c.value
-```
-*In English:* "For each voltage source, look up its dedicated row `s`. Put `+1` where its
-+ node meets that row/column and `-1` where its - node does. Those entries do two jobs at
-once: they inject the source's unknown current into the two nodes' KCL equations, and
-they state the rule 'V(+node) − V(−node) = value'. Put that `value` into `z` at row `s`."
+**The core idea first:** the unknowns in any circuit are the voltages at the junctions. Two
+physical laws give us enough equations to pin them down. **Ohm's law:** the current through
+a resistor equals the voltage across it divided by its resistance. **Kirchhoff's Current
+Law:** at every junction, the current flowing in equals the current flowing out — nothing
+accumulates. If I write that current-balance at every junction, and express each current in
+terms of the unknown voltages, I get one equation per junction. Stack all those equations
+into a grid of numbers (a matrix) and hand it to numpy, and out come the voltages. The
+"modified" twist is that an ideal battery *forces* a voltage instead of obeying Ohm's law,
+so each battery needs one extra unknown (its own current) and one extra equation.
 
-**Block 8 — solve the system.**
-```python
-try:
-    x = np.linalg.solve(A, z)
-except np.linalg.LinAlgError as err:
-    raise SolverError("circuit is unsolvable (singular matrix) ...") from err
-```
-*In English:* "Hand the finished matrix and vector to numpy; `np.linalg.solve` returns
-`x`, the vector of all unknowns, in one step. If numpy says the matrix is 'singular'
-(no unique solution), translate that into a friendly `SolverError` explaining the likely
-cause — a floating node or a short."
+**How it's built, move by move:**
 
-**Block 9 — unpack the answer into named results.**
-```python
-node_voltages = {GROUND: 0.0}
-for name, i in node_index.items():
-    node_voltages[name] = float(x[i])
-source_currents = {c.name: float(x[vsource_index[c.name]]) for c in vsources}
-branch_currents = {}
-for c in netlist.components:
-    if c.kind == "R":
-        va, vb = node_voltages[c.nodes[0]], node_voltages[c.nodes[1]]
-        branch_currents[c.name] = (va - vb) / c.value
-    elif c.kind == "I":
-        branch_currents[c.name] = c.value
-return SolveResult(node_voltages, source_currents, branch_currents)
-```
-*In English:* "Translate the raw numbers in `x` back into named results. Ground is exactly
-0. Each node row of `x` becomes that net's voltage; each source row becomes that source's
-current. Then compute resistor currents from the voltages we just found (Ohm's law again:
-`(Va − Vb)/R`) — these drive the current-arrow overlay later. Bundle everything into a
-`SolveResult` and return it."
+- First I'm pulling in the **numpy math library**, because solving many equations at once is
+  exactly the matrix arithmetic it's built for. I'm also importing the **ground constant and
+  the netlist type from File 1**, so the solver speaks the same language the netlist was
+  written in. *This import is the concrete link between the two files.*
 
-### `tests/` + `conftest.py` — how we know the code works
+- Now I'm defining a solver-specific **error** (same idea as before, for solver problems)
+  and a **result record** that will hold the answer in three labeled tables: the voltage at
+  every net, the current through every battery, and the current through every resistor. The
+  result also knows how to **print itself** as a tidy human-readable summary — that's what
+  produces the neat voltage list you see when running a demo.
 
-`tests/test_netlist.py` contains 11 small functions, each named `test_...`, each
-asserting that a known input gives a known output (e.g. `parse_value("2k2") == 2200`).
-The `pytest` tool finds and runs them all with one command. The principle (from the
-brief): every module gets tested **in isolation** so when something breaks, we know
-*which* module broke. `conftest.py` at the repo root is empty plumbing — its presence
-tells pytest "imports start from here," letting tests say `from solver.netlist import …`.
+- Now the **solve routine** begins, and the very first thing it does is **refuse circuits it
+  can't handle**: one with no ground (no reference point, so "voltage" would be meaningless),
+  or one containing a diode (those bend the rules of Ohm's law and need a more advanced
+  method saved for a later phase). Failing fast with a clear message beats producing
+  nonsense quietly.
 
-Run them yourself anytime: `.venv/bin/python -m pytest tests/ -v`
+- Now I'm **deciding what the unknowns are.** I ask the netlist for its list of nodes
+  (*calling straight into File 1's "list the nodes" method*) and give each one a row number.
+  Then I find the batteries and give *each of them* its own extra row number, placed after
+  the node rows. The total count of rows is the total number of unknowns, which is also the
+  number of equations — the grid will be exactly that size, square.
+
+- Now I'm creating an **empty grid and an empty right-hand-side list**, both filled with
+  zeros, sized to match. Everything from here is about filling them in. The technique is
+  called "stamping": I walk the components one at a time and each one adds its own small,
+  fixed contribution into the grid. Components add up independently, which is what makes
+  this systematic enough for a computer.
+
+- Now I'm **stamping the resistors and current sources** in one pass over the components.
+  For a resistor I work out its conductance (just one divided by its resistance) and add it
+  into four spots in the grid — twice on the diagonal for its two nodes, and twice on the
+  crossing spots that link them. That four-spot pattern *is* the current-balance-plus-Ohm's-
+  law for that resistor, written into numbers. Any spot that would land on ground is skipped,
+  because ground has no row. For a current source — which simply forces a fixed current — the
+  value goes onto the right-hand-side list instead: it pulls current out of one node and
+  pushes it into the other. A capacitor blocks steady current, so at this DC stage it does
+  nothing and I let it fall through untouched.
+
+- Now I'm **stamping the batteries** — the "modified" part. A battery insists that the
+  voltage difference between its two ends equals its value, which can't be written with
+  conductances. So for each battery I place simple +1 and −1 markers where its two nodes
+  meet its own extra row and column. Those markers do two jobs at once: they feed the
+  battery's unknown current into the two nodes' balance equations, and they state the rule
+  "this end minus that end equals the battery's voltage." That voltage goes onto the right-
+  hand side at the battery's row.
+
+- Now the grid and the right-hand side are complete, so I'm **asking numpy to solve the whole
+  system in one step.** It returns a single list of numbers — all the unknown voltages and
+  battery currents together. If numpy reports the system has no unique answer (which happens
+  for a broken circuit like a floating, unconnected node), I catch that and re-raise it as a
+  friendly error explaining the likely cause, instead of letting a cryptic math error escape.
+
+- Now I'm **translating that raw list of numbers back into meaningful, named results.**
+  Ground is set to exactly zero. Each node's row becomes that net's voltage; each battery's
+  row becomes that battery's current. Then I compute every resistor's current from the
+  voltages I just found, using Ohm's law again — these will drive the current-arrow overlay
+  later. Finally I bundle all three tables into the result record and hand it back. *That
+  returned record is exactly what File 3 reads to build its answer key.*
+
+---
+
+## File 3 — `data_collection/synthetic.py` — the fake-circuit generator
+
+**Where this fits in the pipeline:** It's *not* a station on the belt. It's a workshop tool
+that manufactures test material — clean, computer-drawn circuits — so we can exercise the
+real stations without hand-drawing and hand-labeling hundreds of circuits.
+
+**What feeds in / what it feeds:** It *uses* File 1 (to record each circuit as a netlist)
+and File 2 (to solve each circuit so the answer is included). It *produces*, for every
+sample, two matching files: a picture, and an "answer key" listing every component, exactly
+where it sits in the picture, the circuit as text, and the solved voltages. Those answer
+keys are what the vision stations (3 and 4) will later be measured against.
+
+**The core idea first:** because our own code places every part on the page, it knows the
+truth about each one for free. So as it draws, it simultaneously writes down the matching
+netlist and the location of each part. That guarantees the picture and the answer key can
+never disagree.
+
+**How it's built, move by move:**
+
+- First, a small but important housekeeping move: I'm **adding the project's main folder to
+  the list of places this script looks for code**, because a script only searches its own
+  folder by default, and the solver lives one level up. Without this, the script couldn't
+  reach Files 1 and 2 at all. Then I import the drawing library, the math library, an
+  image library, and — crucially — the **solve routine from File 2 and the netlist type
+  from File 1.**
+
+- Now I'm listing the **realistic values to choose from** — a pool of common resistor sizes
+  and battery voltages — so the generated circuits look like things a real person would draw.
+
+- Now I'm defining a small **record for one component's ground-truth label**: its name, its
+  type, its written value, and its box — the rectangle, in pixels, marking where it sits in
+  the image.
+
+- Now I'm writing the **circuit templates**, which are the heart of this file. Each template
+  is a recipe that draws one *style* of circuit and, in lockstep, records the matching
+  netlist and the list of parts to box. The key discipline is that drawing and recording
+  happen together, step for step, so they always match.
+  - The **series divider** places a battery on the left going up, runs a wire across the
+    top, then stacks a random number of resistors going down the right side back to ground.
+    As it places each resistor it *immediately* records that resistor in the netlist,
+    connecting it between the node above and the node below — so the electrical description
+    is built at the same instant as the drawing. It drops a junction dot at each internal
+    connection, matching the drawing rule that every junction gets a dot.
+  - The **parallel bank** places a battery on the left, then extends a top wire and a bottom
+    wire to the right *together, one step at a time*, and bridges them with a resistor at
+    each step. Because every resistor bridges the same top wire and the same bottom wire,
+    they all share the same two nodes — which is exactly what "in parallel" means. Drawing
+    both rails in lockstep is what guarantees each resistor is genuinely connected at both
+    ends, rather than dangling. *(An earlier version forgot the bottom rail, so the picture
+    showed open circuits that disagreed with the netlist; building both rails together fixed
+    it — a good example of the picture and the answer key having to be kept honest with each
+    other.)*
+
+- Now I'm collecting the templates into a **list to pick from at random**, so the dataset
+  gets a mix of circuit styles.
+
+- Now I'm writing the **box-to-pixels converter**, which solves a subtle but real problem.
+  The drawing library knows where each part is in its own diagram units, but the answer key
+  needs pixel locations in the final image. The naive conversion is thrown off by Retina
+  screens, where the real image is secretly twice the size the drawing tool reports. So
+  instead I convert each part's location into a **fraction of the whole figure** — a zero-to-
+  one coordinate that doesn't care about screen resolution — and only then multiply by the
+  image's *true* pixel size. I also flip the vertical direction, because diagrams measure up
+  from the bottom while images count rows down from the top. *(Getting this right was the
+  fiddliest part of the file; the first attempt put every box in the wrong place, and I only
+  caught it by drawing the boxes onto a sample image and looking at them.)*
+
+- Now I'm writing the routine that **makes one complete sample.** It picks a template at
+  random and runs it, getting back the drawing, the netlist, and the list of parts to box.
+  It renders the drawing, then reaches down to the real underlying figure and forces it to
+  draw so the pixels actually exist. It reads the finished image straight out of the render
+  buffer, and — to dodge the Retina trap — takes the **true width and height from the image
+  itself** rather than trusting the reported size. Then for each recorded part it asks the
+  drawing library for that part's location and runs it through the box-to-pixels converter.
+  Next it **calls the solver from File 2 on the netlist** to get the voltages, so the answer
+  key is complete. Finally it assembles everything — the circuit style, the image size, the
+  list of boxed components, the circuit as text, and the solved voltages — into one tidy
+  answer-key bundle, and returns that alongside the image.
+
+- Now I'm writing the **main entry point**, the part that runs when you launch the script.
+  It reads the options you typed — how many circuits to make, which folder to put them in,
+  and a seed number that makes the random choices repeatable so the same command always
+  produces the same dataset. Then it loops the requested number of times, and for each one
+  it saves the picture and its matching answer key side by side under the same name, and
+  prints a one-line note about what it made.
+
+---
+
+## The tests — `tests/test_netlist.py` and `tests/test_mna.py`
+
+**Where this fits:** not a station, but the safety net under Files 1 and 2. The project's
+rule is that every module is checked on its own, so when something breaks you know exactly
+which part broke.
+
+**What feeds in / what it feeds:** the tests build small circuits by hand using File 1, run
+them through File 2, and check the answers against numbers worked out on paper.
+
+**How they work, in plain English:** each test is a tiny self-contained check that feeds a
+known input in and insists on a known answer. The value-reader tests confirm that "10k"
+becomes ten thousand, that "4u7" becomes 4.7 millionths, that a trailing unit is ignored,
+and that nonsense is rejected. The solver tests use circuits simple enough to solve by hand:
+a voltage divider where the midpoint must land at exactly half; resistors in series and in
+parallel with currents you can check by hand; a two-battery circuit; a current source; a
+capacitor that must change nothing at this DC stage; and the deliberately broken cases — no
+ground, a floating node, a diode — which must each raise a clear error rather than return a
+wrong number. There's also one test that writes a circuit as text, reads it back, and solves
+it, proving Files 1 and 2 work together end to end. A single command runs all of them at
+once and reports pass or fail. A companion empty file at the project root simply tells the
+test runner where the project begins, so the tests can find the `solver` code.
+
+---
+
+## Where the build stands
+
+Built and tested: the netlist (File 1), the solver (File 2), and the generator (File 3).
+That's the entire back half of the conveyor belt — the hard math — proven against circuits
+we can check by hand, plus a tool that manufactures unlimited labeled test circuits.
+
+Still ahead, in order: tracing wires from a real image, training the component detector on a
+real dataset, the live camera and overlay, cross-checking our solver against the
+professional simulator, and finally the explain-and-critique and what-if features.

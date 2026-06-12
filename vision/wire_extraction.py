@@ -6,41 +6,64 @@ After the YOLO detector finds each component's bounding box we still need to
 know HOW those components are wired together.  That is, we need the *netlist*:
 "R1 connects net n1 to net n2; V1 connects n1 to 0 (ground); …"
 
-This module recovers the netlist purely from pixels.  The high-level idea:
+This module recovers the netlist purely from pixels.  It is the second design:
+the first one matched terminals to nearby wire "blobs" and needed a pile of
+layout-specific fallbacks that did not survive new circuit layouts (frozen for
+comparison in wire_extraction_baseline.py; full story in ROADMAP.md and
+docs/wire_extraction_redesign_plan.md).
 
-  1. Binarise the image to find where the ink is.
-  2. Erase the component bodies (we know their bounding boxes) so only the
-     *wire* pixels remain.
-  3. Skeletonise those wire pixels to 1-pixel-wide centre lines and label
-     each connected wire segment as a distinct "blob".
-  4. For each component, probe just outside its erased bounding box to find
-     which wire blob(s) each terminal touches.
-  5. Use a union-find to merge blobs and terminals that are electrically
-     connected — either directly (shared wire blob) or through junction dots.
-  6. Each union-find group is one net.  Name them, attach the ground symbol
-     to net "0", and build a Netlist.
+THE CORE IDEA
+-------------
+Erasing a component's bounding box *cuts* every wire that entered it — and each
+cut leaves a skeleton ENDPOINT exactly where the wire attached to the component.
+So instead of asking "what wire pixels are near this terminal?" (everything is
+near a rail), we build a real graph of the wires (vision/skeleton_graph.py) and
+ask "which CUT ENDPOINTS did this component's erasure create?"  Endpoints are
+sparse and meaningful; proximity to them is evidence, not coincidence.
 
-DESIGN CHOICES
---------------
-* We infer terminal positions from the *bounding box geometry* — no terminal
-  coordinates are taken from the generator or detector.  The probes sit at
-  the eight boundary points of the *erased* bounding box (four corners + four
-  edge midpoints) so we land just outside the component body where the wire
-  stubs begin.
-* Junction dots (kind="junction") are handled by a bbox-overlap rule rather
-  than wire-blob proximity because junction dots sit exactly on the component
-  boundary and the erased region swallows any short wire segment between them.
-* The "ground-proximity" fallback handles the series-divider layout where the
-  voltage-source's negative terminal has no physical wire to the ground symbol
-  (they are co-located in schematic space but pixel-distant in the image).
+THE PIPELINE
+------------
+ 1. Binarise the image (Otsu) to an ink mask.
+ 2. Erase every component's expanded bounding box; remember the erased
+    rectangles as labelled REGIONS (overlapping boxes merge into one region —
+    which is itself information: their components touch).
+ 3. Skeletonise the leftover wires and build the skeleton graph.  Each
+    connected piece of the graph is one candidate net; each endpoint is a spot
+    where some erasure cut a wire.
+ 4. Infer every component's terminal points from its bounding-box geometry
+    (tall box → pins at top/bottom mid-edges, wide box → left/right).
+ 5. Connect terminals to nets using FOUR rules, ordered strongest evidence
+    first; a weaker rule only fires when the stronger ones found nothing:
+      (1) FACE BAND — endpoints lying along the terminal's face of the erased
+          box, in the same region.  (The plain case: the wire was cut right
+          where the pin is.)
+      (2) JUNCTION DOTS — a junction's erasure also cuts wires; everything
+          around the dot (cut endpoints + the nearest terminal of each
+          touching component) is one electrical node.  This is the drawing
+          convention doing its job.
+      (3) TOUCHING TERMINALS — two still-unconnected terminals of different
+          components, very close together inside one merged region, are
+          connected (their joining wire was swallowed whole by the merged
+          erasure — e.g. a source lead meeting a resistor lead directly).
+      (4) REGION RESCUE — a terminal still unconnected (and not on a junction)
+          takes the nearest endpoint of its own region, within a generous cap.
+          This recovers leads that attach far outside their symbol's box
+          (a voltage source's lead can sit ~90 px out because the box is
+          inflated by its text label).
+ 6. Union-find merges everything; the group holding a ground symbol becomes
+    net "0"; emit the Netlist (placeholder values — reading values is a
+    different module's job).
+
+Every rule is stated in terms of what erasure does to wires.  None of them
+mention "vertical", "above the ground symbol", or any template's layout.
 """
 
 from __future__ import annotations
 
 import math
-from pathlib import Path
 from typing import Any
 
+import networkx as nx
 import numpy as np
 from PIL import Image
 from scipy.ndimage import label as nd_label
@@ -49,33 +72,28 @@ from skimage.filters import threshold_otsu
 from skimage.morphology import skeletonize
 
 from solver.netlist import GROUND, KINDS, Netlist
+from vision.skeleton_graph import build_skeleton_graph
 
 # ---------------------------------------------------------------------------
 # Kind mapping: human-readable component name -> SPICE one-letter code.
-#
 # "ground" and "junction" are NOT circuit components; they get special
 # treatment (ground marks net "0"; junctions merge nearby terminals).
+# Anything else (e.g. "text") is erased from the image but produces nothing.
 # ---------------------------------------------------------------------------
 KIND_MAP: dict[str, str] = {
     "resistor":       "R",
     "voltage source": "V",
     "capacitor":      "C",
     "diode":          "D",
-    # "switch" would be "S" but Netlist.KINDS doesn't include it yet;
-    # add it here if KINDS is extended:
-    # "switch": "S",
+    # "switch" would be "S" but Netlist.KINDS doesn't include it yet.
 }
 
-# Only the codes that Netlist.add() actually accepts.
 _SUPPORTED_KINDS = set(KINDS.keys())   # {"R", "C", "V", "I", "D"}
 
-# Placeholder values written into the netlist (ignored by equivalence check).
+# Placeholder values written into the netlist (ignored by the equivalence
+# check; value READING is a separate, later module).
 _PLACEHOLDERS: dict[str, str] = {
-    "R": "1k",
-    "V": "1",
-    "C": "1u",
-    "I": "1m",
-    "D": "1",
+    "R": "1k", "V": "1", "C": "1u", "I": "1m", "D": "1",
 }
 
 
@@ -93,7 +111,7 @@ class _UF:
         if x not in self._parent:
             self._parent[x] = x
         if self._parent[x] != x:
-            self._parent[x] = self.find(self._parent[x])  # path compression
+            self._parent[x] = self.find(self._parent[x])
         return self._parent[x]
 
     def union(self, x: str, y: str) -> None:
@@ -103,178 +121,114 @@ class _UF:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Binarise
+# Image-level helpers
 # ---------------------------------------------------------------------------
 
 def _to_ink_mask(image: np.ndarray) -> np.ndarray:
-    """Convert an HxW(x3) image to a boolean mask that is True where ink is.
-
-    Ink is darker than the paper background, so we use Otsu's threshold and
-    mark pixels *below* it as ink.
-    """
+    """Boolean mask, True where ink is (ink = darker than Otsu threshold)."""
     if image.ndim == 3:
-        gray = rgb2gray(image)      # skimage returns float [0,1]
+        gray = rgb2gray(image)
     else:
-        # Already grayscale; normalise to [0,1] if needed.
         gray = image.astype(float)
         if gray.max() > 1.0:
             gray /= 255.0
-
-    thresh = threshold_otsu(gray)   # the natural split between paper and ink
-    return gray < thresh            # True = dark = ink
+    return gray < threshold_otsu(gray)
 
 
-# ---------------------------------------------------------------------------
-# Step 2: Erase component bounding boxes
-# ---------------------------------------------------------------------------
-
-def _erase_components(ink: np.ndarray,
-                      components: list[dict],
+def _erase_components(ink: np.ndarray, components: list[dict],
                       margin: int) -> np.ndarray:
-    """Zero out every component's (possibly enlarged) bounding box.
-
-    We erase EVERYTHING in the component list — resistors, sources, junctions,
-    ground symbols, text — because all of those sit on top of the wire.
-    The wire stub is *just outside* the erased rectangle (that is why we keep
-    margin small: big enough to fully remove the body, small enough not to
-    eat the wire stubs we need for terminal matching).
-    """
+    """Zero out every component's margin-expanded bounding box."""
     erased = ink.copy()
     h, w = erased.shape
-
     for comp in components:
         xmin, ymin, xmax, ymax = comp["bbox"]
-        # Convert to int and clamp to image bounds.
-        r0 = max(0, int(ymin) - margin)
-        r1 = min(h, int(ymax) + margin)
-        c0 = max(0, int(xmin) - margin)
-        c1 = min(w, int(xmax) + margin)
+        r0, r1 = max(0, int(ymin) - margin), min(h, int(ymax) + margin)
+        c0, c1 = max(0, int(xmin) - margin), min(w, int(xmax) + margin)
         erased[r0:r1, c0:c1] = False
-
     return erased
 
 
-# ---------------------------------------------------------------------------
-# Step 3: Skeletonise and label wire blobs
-# ---------------------------------------------------------------------------
+def _region_map(shape: tuple[int, int], components: list[dict],
+                margin: int) -> np.ndarray:
+    """Label the union of all expanded bounding boxes into connected regions.
 
-def _skeletonise_and_label(wire_mask: np.ndarray) -> tuple[np.ndarray, int]:
-    """Thin wire mask to 1-pixel skeleton, then label connected components.
-
-    Returns (label_array, num_blobs).  Label 0 is background; labels 1..N
-    are individual wire fragments.  8-connectivity (3×3 structuring element)
-    is used so diagonal wires stay connected.
+    Overlapping/touching boxes merge into ONE region — deliberately: when two
+    components' erasures merge, the wire evidence between them is gone, and
+    "same region" is the licence the weaker matching rules need.
     """
-    skeleton = skeletonize(wire_mask)
+    h, w = shape
+    mask = np.zeros((h, w), dtype=bool)
+    for comp in components:
+        xmin, ymin, xmax, ymax = comp["bbox"]
+        r0, r1 = max(0, int(ymin) - margin), min(h, int(ymax) + margin)
+        c0, c1 = max(0, int(xmin) - margin), min(w, int(xmax) + margin)
+        mask[r0:r1, c0:c1] = True
+    labeled, _ = nd_label(mask, structure=np.ones((3, 3), dtype=int))
+    return labeled
 
-    # 8-connectivity structuring element.
-    structure = np.ones((3, 3), dtype=int)
-    labeled, n_blobs = nd_label(skeleton, structure=structure)
-    return labeled, n_blobs
+
+def _regions_near(regions: np.ndarray, x: float, y: float,
+                  win: int = 5) -> set[int]:
+    """Region ids found within a small window of (x, y).
+
+    Endpoints sit just OUTSIDE the erased rectangles that cut them, so we look
+    in a window rather than at the exact pixel.  A point may be near two
+    regions at once; we return all of them.
+    """
+    h, w = regions.shape
+    x0, x1 = max(0, int(x) - win), min(w, int(x) + win + 1)
+    y0, y1 = max(0, int(y) - win), min(h, int(y) + win + 1)
+    vals = regions[y0:y1, x0:x1]
+    return set(int(v) for v in np.unique(vals) if v > 0)
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Terminal probing
+# Geometry helpers
 # ---------------------------------------------------------------------------
 
-def _corner_probes(bbox: list[float],
-                   margin: int) -> tuple[list[tuple], list[tuple]]:
-    """Return probe point lists for the two terminals of a 2-terminal component.
+def _terminal_points(bbox: list[float]) -> tuple[tuple[float, float],
+                                                 tuple[float, float]]:
+    """The two pin points of a 2-terminal component, from bbox geometry.
 
-    We probe at the BOUNDARY of the *erased* bounding box — i.e. just outside
-    the component body — so the probe lands where the wire stub begins after
-    erasure.  We generate three points per terminal side: left corner, right
-    corner, and edge midpoint.
-
-    For a vertical component (height >= width) the two terminals are on the
-    top edge (terminal-0) and bottom edge (terminal-1) of the erased bbox.
-    For a horizontal component it's left/right.
-
-    (In practice the corner with the shortest distance to the wire usually
-    wins because the wire exits from a corner of the component body, not
-    always from the center of an edge.)
+    A component's leads leave through the two ends of its LONGER axis: a tall
+    box pins at top/bottom mid-edges, a wide box at left/right.  Convention:
+    t0 = top (vertical) or left (horizontal); t1 = the opposite end.
     """
     xmin, ymin, xmax, ymax = bbox
-    cx = (xmin + xmax) / 2.0
-    cy = (ymin + ymax) / 2.0
+    cx, cy = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+    if (ymax - ymin) >= (xmax - xmin):
+        return (cx, ymin), (cx, ymax)
+    return (xmin, cy), (xmax, cy)
 
-    # Expand by the erase margin so probes sit outside the erased region.
-    ex0 = xmin - margin
-    ex1 = xmax + margin
-    ey0 = ymin - margin
-    ey1 = ymax + margin
-
-    # Probes on the "top" face of the erased box.
-    top_probes = [(ex0, ey0), (ex1, ey0), (cx, ey0)]
-    # Probes on the "bottom" face of the erased box.
-    bot_probes = [(ex0, ey1), (ex1, ey1), (cx, ey1)]
-
-    return top_probes, bot_probes
-
-
-def _find_all_blobs(probes: list[tuple],
-                    skel_pts: np.ndarray,
-                    labeled: np.ndarray,
-                    radius: float) -> set[int]:
-    """Find every non-zero blob label whose nearest skeleton pixel is within radius.
-
-    Searching ALL probes and returning ALL matching blobs (not just the nearest
-    one) is crucial for the parallel-bank layout where a component touches two
-    separate wire segments on the same terminal side — we must merge those
-    segments into one net.
-    """
-    found: set[int] = set()
-    if skel_pts.shape[0] == 0:
-        return found
-
-    for tx, ty in probes:
-        dists = np.hypot(skel_pts[:, 0] - tx, skel_pts[:, 1] - ty)
-        for i, d in enumerate(dists):
-            if d <= radius:
-                blob = int(labeled[int(skel_pts[i, 1]), int(skel_pts[i, 0])])
-                if blob > 0:
-                    found.add(blob)
-
-    return found
-
-
-# ---------------------------------------------------------------------------
-# Step 5: Junction merging and ground proximity fallback
-# ---------------------------------------------------------------------------
 
 def _bbox_border_dist(px: float, py: float, bbox: list[float]) -> float:
-    """Signed distance from point (px,py) to the nearest edge of bbox.
-
-    Returns a NEGATIVE value if the point is strictly inside the box
-    (|value| = distance to the nearest edge), and a positive Euclidean
-    distance if it is outside.  Zero means exactly on the border.
-
-    This lets us answer "is this junction center on/inside the component
-    bounding box?" with a threshold like ``dist <= threshold``.
-    """
+    """Distance from a point to a bbox border: negative inside, 0 on it."""
     xmin, ymin, xmax, ymax = bbox
-    inside_x = xmin <= px <= xmax
-    inside_y = ymin <= py <= ymax
-
-    if inside_x and inside_y:
-        # Distance to nearest edge (negative = inside).
-        dx = min(px - xmin, xmax - px)
-        dy = min(py - ymin, ymax - py)
-        return -min(dx, dy)
-
-    # Outside: Euclidean distance to the nearest point on the border.
+    if xmin <= px <= xmax and ymin <= py <= ymax:
+        return -min(px - xmin, xmax - px, py - ymin, ymax - py)
     nearest_x = max(xmin, min(xmax, px))
     nearest_y = max(ymin, min(ymax, py))
     return math.hypot(px - nearest_x, py - nearest_y)
 
 
-def _x_ranges_overlap(bbox1: list[float],
-                       bbox2: list[float],
-                       margin: int) -> bool:
-    """Return True if the two (margin-expanded) bboxes overlap in the X direction."""
-    lo = max(bbox1[0] - margin, bbox2[0] - margin)
-    hi = min(bbox1[2] + margin, bbox2[2] + margin)
-    return hi > lo
+def _in_face_band(ep: tuple[float, float], bbox: list[float],
+                  side: str, margin: int, radius: float) -> bool:
+    """Is endpoint `ep` in the band along one face of the ERASED bbox?
+
+    The band is the face line of the margin-expanded box, thickened by
+    `radius` in the face's normal direction and widened by `radius` along it —
+    i.e. "the strip where this face's erasure would have cut a wire".
+    """
+    x, y = ep
+    xmin, ymin, xmax, ymax = bbox
+    ex0, ey0 = xmin - margin, ymin - margin
+    ex1, ey1 = xmax + margin, ymax + margin
+    vertical = (ymax - ymin) >= (xmax - xmin)
+    if vertical:
+        face_y = ey0 if side == "t0" else ey1
+        return abs(y - face_y) <= radius and (ex0 - radius) <= x <= (ex1 + radius)
+    face_x = ex0 if side == "t0" else ex1
+    return abs(x - face_x) <= radius and (ey0 - radius) <= y <= (ey1 + radius)
 
 
 # ---------------------------------------------------------------------------
@@ -293,243 +247,208 @@ def extract_netlist(
     Parameters
     ----------
     image:
-        HxW or HxWx3 numpy array, or a PIL Image.  Accepts both; converted to
-        greyscale internally.
+        HxW or HxWx3 numpy array, or a PIL Image.
     components:
-        List of dicts, each like::
-
-            {"name": "R1", "kind": "resistor", "value": "10k", "bbox": [x0,y0,x1,y1]}
-
-        The "bbox" values are pixel coordinates (top-left origin, floats OK).
-        The "kind" must be one of the keys in KIND_MAP or "ground"/"junction".
+        List of dicts like
+        ``{"name": "R1", "kind": "resistor", "value": "10k", "bbox": [x0,y0,x1,y1]}``
+        (pixel coords, top-left origin) — the synthetic ground-truth format,
+        later the YOLO detection format.
     match_radius:
-        Maximum pixel distance a probe point can be from the nearest skeleton
-        pixel and still count as connected.  Default: max(6, 1% of the image
-        diagonal).  Expose this so tests can tune it.
+        Close-range matching distance (face bands, junction snapping).
+        Default: max(6, 1% of the image diagonal).
     debug:
-        If True, return ``(netlist, info_dict)`` where ``info_dict`` contains
-        the intermediate terminal→net mapping and wire-blob label array.
-
-    Returns
-    -------
-    A Netlist (or a (Netlist, dict) pair when debug=True).
+        If True, return ``(netlist, info)`` where ``info`` holds the skeleton
+        graph, endpoints, regions and per-terminal net assignments — the
+        payload vision/debug_viz.py renders into a picture.
     """
-
-    # --- normalise image input -------------------------------------------
     if isinstance(image, Image.Image):
         image = np.asarray(image)
-
     h, w = image.shape[:2]
+    diag = math.hypot(w, h)
 
-    # Default match_radius: ~1% of the diagonal, minimum 6 pixels.
     if match_radius is None:
-        diag = math.hypot(w, h)
         match_radius = max(6, int(0.01 * diag))
 
-    # Erase margin: 4 pixels beyond each side of the bbox.
-    # Must be ≥ 1 to fully remove component terminal stubs but small enough
-    # not to eat the wire segment just outside the box.
-    _ERASE_MARGIN = 4
+    _MARGIN = 4                                   # erase margin (px)
+    _JUNCTION_TOUCH = 5                           # junction-to-bbox contact (px)
+    _TT_CAP = max(40, int(0.05 * diag))           # touching-terminals cap
+    _RESCUE_CAP = max(80, int(0.09 * diag))       # region-rescue cap
 
-    # A junction is considered "touching" a component if its centre is within
-    # this many pixels of the component's bbox border (or inside it).
-    _JUNCTION_THRESHOLD = 5
-
-    # GND uses a larger search radius because parallel-bank ground symbols
-    # can be ~35 pixels away from the nearest wire fragment after erasure.
-    _GND_RADIUS = 40
-
-    # ------------------------------------------------------------------
-    # Step 1 — binarise
-    # ------------------------------------------------------------------
+    # --- steps 1-3: ink -> erased -> skeleton graph -----------------------
     ink = _to_ink_mask(image)
+    wire_only = _erase_components(ink, components, _MARGIN)
+    skel = skeletonize(wire_only)
+    graph = build_skeleton_graph(skel, prune_len=4)
+    regions = _region_map((h, w), components, _MARGIN)
 
-    # ------------------------------------------------------------------
-    # Step 2 — erase all component boxes
-    # ------------------------------------------------------------------
-    wire_only = _erase_components(ink, components, _ERASE_MARGIN)
+    # Each connected piece of the skeleton graph is one candidate net.
+    net_of_node: dict[int, int] = {}
+    for net_id, nodes in enumerate(nx.connected_components(graph)):
+        for n in nodes:
+            net_of_node[n] = net_id
 
-    # ------------------------------------------------------------------
-    # Step 3 — skeletonise + label wire blobs
-    # ------------------------------------------------------------------
-    labeled, _n_blobs = _skeletonise_and_label(wire_only)
+    # All cut endpoints, with their net and nearby region(s).
+    endpoints: list[dict] = []
+    for n, data in graph.nodes(data=True):
+        if data["kind"] != "endpoint":
+            continue
+        pos = data["pos"]
+        endpoints.append({
+            "pos": pos,
+            "net": net_of_node[n],
+            "regions": _regions_near(regions, pos[0], pos[1]),
+        })
 
-    # Build a (N,2) array of skeleton pixel coordinates (x, y) for fast
-    # distance computations.
-    skel_ys, skel_xs = np.where(labeled > 0)
-    if skel_xs.size > 0:
-        skel_pts = np.stack([skel_xs, skel_ys], axis=1).astype(np.float32)
-    else:
-        skel_pts = np.empty((0, 2), dtype=np.float32)
+    # --- step 4: terminal records ------------------------------------------
+    two_terminal = [c for c in components if c["kind"] in KIND_MAP]
+    junctions = [c for c in components if c["kind"] == "junction"]
+    gnd_symbols = [c for c in components if c["kind"] == "ground"]
 
-    # ------------------------------------------------------------------
-    # Separate components by role
-    # ------------------------------------------------------------------
-    two_terminal = [c for c in components
-                    if c["kind"] not in ("junction", "ground")]
-    junctions    = [c for c in components if c["kind"] == "junction"]
-    gnd_symbols  = [c for c in components if c["kind"] == "ground"]
-
-    # ------------------------------------------------------------------
-    # Step 6 — union-find
-    # ------------------------------------------------------------------
     uf = _UF()
 
-    # dict mapping (comp_name, "t0"/"t1") -> a canonical union-find key.
-    terminal_key: dict[tuple[str, str], str] = {}
+    def _net_key(net_id: int) -> str:
+        return f"wire_{net_id}"
 
-    _float_id = [0]   # counter for terminals that find no wire blob
-
-    def _new_float() -> str:
-        fid = f"float_{_float_id[0]}"
-        _float_id[0] += 1
-        return fid
-
-    # --- 6a. Locate the ground net (the GND symbol's terminal) ----------
-    # We probe with the larger GND radius because the ground symbol can sit
-    # a few dozen pixels away from the nearest surviving wire fragment.
-    gnd_node: str | None = None
-    for gnd in gnd_symbols:
-        bbox = gnd["bbox"]
-        xmin, ymin, xmax, ymax = bbox
-        cx = (xmin + xmax) / 2.0
-        cy = (ymin + ymax) / 2.0
-        gnd_probes = [
-            (cx,                     ymin - _ERASE_MARGIN),  # top edge centre
-            (xmax + _ERASE_MARGIN,   cy),                    # right edge centre
-            (xmin - _ERASE_MARGIN,   cy),                    # left edge centre
-            (xmin - _ERASE_MARGIN,   ymin - _ERASE_MARGIN),  # top-left corner
-            (xmax + _ERASE_MARGIN,   ymin - _ERASE_MARGIN),  # top-right corner
-        ]
-        blobs = _find_all_blobs(gnd_probes, skel_pts, labeled, _GND_RADIUS)
-        if blobs:
-            gnd_node = f"blob_{min(blobs)}"
-            for b in blobs:
-                uf.union(gnd_node, f"blob_{b}")
-        else:
-            gnd_node = _new_float()
-        uf.find(gnd_node)
-
-    # --- 6b. Assign each 2-terminal component's terminals ----------------
+    # One record per electrical terminal (2 per component, 1 per ground).
+    records: list[dict] = []
     for comp in two_terminal:
-        bbox  = comp["bbox"]
-        name  = comp["name"]
-        top_p, bot_p = _corner_probes(bbox, _ERASE_MARGIN)
+        p0, p1 = _terminal_points(comp["bbox"])
+        for side, point in (("t0", p0), ("t1", p1)):
+            records.append({
+                "key": f"term_{comp['name']}_{side}",
+                "comp": comp, "side": side, "point": point,
+                "region": _regions_near(regions, point[0], point[1]),
+                "claimed": False, "on_junction": False,
+            })
+    for comp in gnd_symbols:
+        xmin, ymin, xmax, ymax = comp["bbox"]
+        centre = ((xmin + xmax) / 2.0, (ymin + ymax) / 2.0)
+        records.append({
+            "key": f"term_{comp['name']}_g",
+            "comp": comp, "side": "g", "point": centre,
+            "region": _regions_near(regions, centre[0], centre[1]),
+            "claimed": False, "on_junction": False,
+        })
+    for rec in records:
+        uf.find(rec["key"])
 
-        t0_blobs = _find_all_blobs(top_p, skel_pts, labeled, match_radius)
-        t1_blobs = _find_all_blobs(bot_p, skel_pts, labeled, match_radius)
+    # --- step 5, rule (1): FACE BAND ---------------------------------------
+    # Endpoints lying along this terminal's face of the erased box, cut by the
+    # same region this component lives in: the wire attached right here.
+    for rec in records:
+        bbox = rec["comp"]["bbox"]
+        for ep in endpoints:
+            if not (rec["region"] & ep["regions"]):
+                continue
+            if rec["side"] == "g":
+                # Ground has one lead but its symbol's orientation varies, so
+                # accept a cut anywhere snug around the box.
+                hit = _bbox_border_dist(ep["pos"][0], ep["pos"][1],
+                                        bbox) <= _MARGIN + match_radius
+            else:
+                hit = _in_face_band(ep["pos"], bbox, rec["side"],
+                                    _MARGIN, match_radius)
+            if hit:
+                uf.union(rec["key"], _net_key(ep["net"]))
+                rec["claimed"] = True
 
-        def _assign(blobs: set[int]) -> str:
-            """Turn a set of blob IDs into a union-find key; apply fallbacks."""
-            if blobs:
-                # Pick the smallest blob id as the canonical key for this group.
-                canonical = f"blob_{min(blobs)}"
-                all_b = [f"blob_{b}" for b in blobs]
-                # Union all blobs found at this terminal together — they are the
-                # same net (e.g. the two wire segments on either side of a rung
-                # in the parallel bank both connect to the same terminal).
-                for bk in all_b[1:]:
-                    uf.union(all_b[0], bk)
-                uf.union(canonical, all_b[0])
-                return canonical
-
-            # No wire blob found directly.  Fall back to the ground net if this
-            # component's x-range overlaps the ground symbol's x-range — which
-            # happens in the series-divider layout where V1's negative terminal
-            # is electrically at ground but physically disconnected from the
-            # ground symbol in the pixel drawing.
-            if gnd_node is not None:
-                if any(_x_ranges_overlap(bbox, g["bbox"], _ERASE_MARGIN)
-                       for g in gnd_symbols):
-                    return gnd_node
-
-            # Truly floating: give it a unique placeholder that will form its
-            # own net unless a junction merges it later.
-            return _new_float()
-
-        t0_key = _assign(t0_blobs)
-        t1_key = _assign(t1_blobs)
-        terminal_key[(name, "t0")] = t0_key
-        terminal_key[(name, "t1")] = t1_key
-        uf.find(t0_key)
-        uf.find(t1_key)
-
-    # --- 6c. Junction merging -------------------------------------------
-    # A junction dot marks a point where two or more components share the same
-    # electrical node.  We detect this by checking whether the junction's
-    # bounding-box centre is inside (or very close to the border of) each
-    # component's bounding box.  Components where the junction is in the top
-    # half connect via terminal-0; those where it is in the bottom half connect
-    # via terminal-1.
+    # --- step 5, rule (2): JUNCTION DOTS ------------------------------------
+    # A junction dot's erasure cut the wires running through it; everything
+    # around the dot is one node: the cut endpoints, plus — for each component
+    # the dot touches — that component's nearest terminal.
     for junc in junctions:
-        jbbox = junc["bbox"]
-        jcx   = (jbbox[0] + jbbox[2]) / 2.0
-        jcy   = (jbbox[1] + jbbox[3]) / 2.0
+        jb = junc["bbox"]
+        jc = ((jb[0] + jb[2]) / 2.0, (jb[1] + jb[3]) / 2.0)
+        jkey = f"junc_{junc['name']}"
+        uf.find(jkey)
+        for ep in endpoints:
+            if _bbox_border_dist(ep["pos"][0], ep["pos"][1],
+                                 jb) <= _MARGIN + match_radius:
+                uf.union(jkey, _net_key(ep["net"]))
+        # Nearest terminal of each touching component joins the junction node.
+        by_comp: dict[str, list[dict]] = {}
+        for rec in records:
+            by_comp.setdefault(rec["comp"]["name"], []).append(rec)
+        for name, recs in by_comp.items():
+            bbox = recs[0]["comp"]["bbox"]
+            if _bbox_border_dist(jc[0], jc[1], bbox) <= _JUNCTION_TOUCH:
+                nearest = min(recs, key=lambda r: math.hypot(
+                    jc[0] - r["point"][0], jc[1] - r["point"][1]))
+                uf.union(jkey, nearest["key"])
+                nearest["on_junction"] = True
 
-        # Collect all (comp, terminal_side) pairs that this junction touches.
-        to_merge: list[str] = []
-        for comp in two_terminal:
-            dist = _bbox_border_dist(jcx, jcy, comp["bbox"])
-            if dist <= _JUNCTION_THRESHOLD:
-                # Is the junction in the top half or bottom half of the component?
-                comp_cy = (comp["bbox"][1] + comp["bbox"][3]) / 2.0
-                t_side  = "t0" if jcy <= comp_cy else "t1"
-                to_merge.append(terminal_key[(comp["name"], t_side)])
+    # --- step 5, rule (3): TOUCHING TERMINALS -------------------------------
+    # Two unconnected terminals of different components, close together inside
+    # one merged region: their joining wire was swallowed by the erasure.
+    unclaimed = [r for r in records if not r["claimed"] and not r["on_junction"]]
+    for i, a in enumerate(unclaimed):
+        for b in unclaimed[i + 1:]:
+            if a["comp"]["name"] == b["comp"]["name"]:
+                continue                      # never short one component
+            if not (a["region"] & b["region"]):
+                continue
+            d = math.hypot(a["point"][0] - b["point"][0],
+                           a["point"][1] - b["point"][1])
+            if d <= _TT_CAP:
+                uf.union(a["key"], b["key"])
 
-        # Union all collected terminals into one group.
-        if len(to_merge) >= 2:
-            for tk in to_merge[1:]:
-                uf.union(to_merge[0], tk)
+    # --- step 5, rule (4): REGION RESCUE ------------------------------------
+    # A terminal with no wire evidence and no junction takes the single
+    # nearest endpoint of its own region, within a generous cap.  Region-
+    # scoped + endpoints-only keeps this from grabbing a passing rail.
+    for rec in records:
+        if rec["claimed"] or rec["on_junction"]:
+            continue
+        best, best_d = None, _RESCUE_CAP
+        for ep in endpoints:
+            if not (rec["region"] & ep["regions"]):
+                continue
+            d = math.hypot(rec["point"][0] - ep["pos"][0],
+                           rec["point"][1] - ep["pos"][1])
+            if d < best_d:
+                best, best_d = ep, d
+        if best is not None:
+            uf.union(rec["key"], _net_key(best["net"]))
+            rec["claimed"] = True
 
-    # ------------------------------------------------------------------
-    # Step 7 — assign net names
-    # ------------------------------------------------------------------
-    gnd_root = uf.find(gnd_node) if gnd_node is not None else None
+    # --- step 6: name nets, ground last, build the Netlist ------------------
+    gnd_roots = {uf.find(f"term_{g['name']}_g") for g in gnd_symbols}
 
-    net_names: dict[str, str] = {}   # uf-root -> net name
-    _net_counter = [0]
+    net_names: dict[str, str] = {}
+    _counter = [0]
 
-    def _get_net(key: str) -> str:
+    def _name_of(key: str) -> str:
         root = uf.find(key)
-        if root == gnd_root:
-            return GROUND              # "0"
+        if root in gnd_roots:
+            return GROUND
         if root not in net_names:
-            _net_counter[0] += 1
-            net_names[root] = f"n{_net_counter[0]}"
+            _counter[0] += 1
+            net_names[root] = f"n{_counter[0]}"
         return net_names[root]
 
-    # ------------------------------------------------------------------
-    # Step 8 — build the Netlist
-    # ------------------------------------------------------------------
     result = Netlist()
+    terminal_nets: dict[str, str] = {}
     for comp in two_terminal:
-        kind_code = KIND_MAP.get(comp["kind"])
-        if kind_code is None:
-            continue          # unknown kind; skip rather than crash
-        if kind_code not in _SUPPORTED_KINDS:
-            # Netlist.add would reject this code; skip and note the limitation.
-            # (Currently "S" for switch is not in KINDS.)
+        code = KIND_MAP[comp["kind"]]
+        if code not in _SUPPORTED_KINDS:
             continue
+        n0 = _name_of(f"term_{comp['name']}_t0")
+        n1 = _name_of(f"term_{comp['name']}_t1")
+        terminal_nets[f"{comp['name']}_t0"] = n0
+        terminal_nets[f"{comp['name']}_t1"] = n1
+        result.add(code, comp["name"], _PLACEHOLDERS.get(code, "1"), n0, n1)
 
-        n0 = _get_net(terminal_key[(comp["name"], "t0")])
-        n1 = _get_net(terminal_key[(comp["name"], "t1")])
-        value = _PLACEHOLDERS.get(kind_code, "1")
-        result.add(kind_code, comp["name"], value, n0, n1)
-
-    # ------------------------------------------------------------------
-    # Optional debug payload
-    # ------------------------------------------------------------------
     if debug:
+        labeled, _ = nd_label(skel, structure=np.ones((3, 3), dtype=int))
         info: dict[str, Any] = {
-            "labeled": labeled,
-            "terminal_nets": {
-                f"{name}_{side}": _get_net(key)
-                for (name, side), key in terminal_key.items()
-            },
-            "gnd_node": gnd_node,
+            "labeled": labeled,            # skeleton pixels by connected wire
+            "graph": graph,                # the full skeleton graph
+            "endpoints": endpoints,        # cut points with nets + regions
+            "regions": regions,            # erased-rectangle region labels
+            "records": records,            # per-terminal matching outcomes
+            "terminal_nets": terminal_nets,
             "match_radius": match_radius,
-            "erase_margin": _ERASE_MARGIN,
+            "erase_margin": _MARGIN,
         }
         return result, info
-
     return result

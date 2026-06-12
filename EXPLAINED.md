@@ -472,35 +472,64 @@ are*. It does **not** tell us *what's wired to what* — and a circuit is nothin
 wiring. Wire extraction fills that gap: given the image plus the component boxes, figure out
 the connections and emit a netlist (the same text format the solver already eats).
 
-## File 8 — `vision/wire_extraction.py`
+## File 8 — `vision/wire_extraction.py` (and its helper, `vision/skeleton_graph.py`)
 
 **The trick that makes it tractable:** we never have to recognise the squiggle inside a box.
 We *erase* every component box from the image — leaving only the bare wires — and then study
-what those wires connect. Here's the assembly line:
+what those wires connect.
 
-1. **Black-and-white.** Convert the photo to a clean "ink / not-ink" mask (Otsu thresholding
-   picks the cutoff automatically).
-2. **Erase the components.** Blank out every component's rectangle (resistors, sources,
-   ground, junction dots, text). What's left is *only wire*.
-3. **Skeletonise.** Thin every wire down to a 1-pixel-wide centreline, so a fat marker stroke
-   and a thin one look the same — just a path.
-4. **Find wire blobs.** Each separate connected run of wire pixels is one "fragment." Anything
-   touching the same fragment is electrically the same point.
-5. **Guess the terminals.** A two-ended component's wire connects at the two ends of its box
-   (a tall box → top and bottom; a wide box → left and right). We *infer* the terminals from
-   the box shape — we don't need the detector to tell us where the pins are.
-6. **Join it all up (union-find).** Each terminal is glued to the wire fragment it touches;
-   each **junction dot** glues together everything sitting under it. Whatever ends up in one
-   group is one electrical "net." The group holding the ground symbol becomes net "0".
-7. **Write the netlist.** For every component, record "connects net A to net B" — and that's a
-   netlist the solver can read.
+**A story first: the version that failed.** Our first extractor matched each component
+terminal to whichever leftover wire *happened to be nearby*. It aced the two circuit layouts
+we'd built (200 out of 200) — then scored **0 out of 30** the moment we drew a third layout
+with horizontal resistors. It hadn't learned wires; it had memorised our two pictures, propped
+up by special-case rules (like "a dangling terminal above a ground symbol must be ground")
+that broke the instant a circuit was arranged differently. We kept that version frozen in
+`wire_extraction_baseline.py` as the "before" picture, and rebuilt on one key insight:
 
-**Honest limitations (on purpose — this is the rigorous part).** Two of the rules above are
-currently tuned to the *synthetic* drawings: a "ground is in the same column" shortcut, and a
-junction rule that assumes components stand vertically. They make all synthetic tests pass,
-but they'll need real wire-stub tracing to survive *hand-drawn* photos. We're writing this
-down rather than hiding it — reporting where it will break is the credible-engineer move, and
-it's already logged in `ROADMAP.md` as Phase-2 hardening work.
+**Erasing a component *cuts* every wire that entered it — and each cut leaves a wire-tip
+exactly where the wire attached to the component.** Those tips are rare and meaningful. So
+instead of "what wire is near this pin?" (everything is near a long rail), we ask "where did
+this component's erasure cut a wire?" — a question with a precise answer.
+
+The assembly line:
+
+1. **Black-and-white.** Otsu thresholding picks the ink/paper cutoff automatically.
+2. **Erase the components** — including the value text. (We learned the hard way that
+   un-erased labels masquerade as wires: "5V" skeletonises into curvy little paths.)
+3. **Skeletonise** what's left to 1-pixel centrelines.
+4. **Build a real wire graph** (`skeleton_graph.py`): a pixel with one neighbour is a wire
+   **tip** (an *endpoint* — usually a cut); three-plus neighbours is a **branch**; the runs
+   in between are the wires themselves. Tiny whiskers get pruned. (One subtle trap: at a
+   corner, diagonal pixels touch each other and naive counting invents phantom branches —
+   there's a small adjacency rule in there whose whole job is preventing that.)
+5. **Guess the terminals from box shape.** A tall box pins at top and bottom; a wide box at
+   left and right.
+6. **Connect terminals to wires with four rules, strongest evidence first** — a weaker rule
+   only fires if the stronger ones found nothing:
+   1. *Face match* — a cut endpoint sits right along the pin's side of the erased box.
+   2. *Junction dots* — everything around a dot (cut tips + the nearest pin of each touching
+      component) is one node. The drawing convention §3 earning its keep.
+   3. *Touching terminals* — two pins of different components, very close inside one merged
+      erased area, are connected (their joining wire was swallowed whole by the erasure).
+   4. *Region rescue* — a still-lost pin takes the nearest cut endpoint *of its own erased
+      region*. This recovers leads that attach far outside their symbol's box.
+7. **Union-find and write the netlist** — groups become nets, the ground symbol's group
+   becomes net "0", done.
+
+Notice what's *not* in the list: nothing about "vertical", "columns", or any particular
+circuit. That's the difference. The proof: the new extractor scores **200/200 across all
+three templates** — including 30/30 on the very layout the old one scored 0/30 on.
+
+**Bonus tool:** `vision/debug_viz.py` draws the extractor's entire mental model onto the
+image — erased boxes, wires coloured by net, cut endpoints circled in red, every pin labelled
+with its net. When real hand-drawn photos start failing (they will), one picture will show
+*which rule* misfired.
+
+**Honest footnote:** chasing the 0/30 failure also caught two bugs in our *own generator* —
+the series-divider drawing never actually drew the wire closing its loop (the old extractor's
+ground hack had been silently covering for it), and value labels had no ground-truth boxes.
+The broken extractor was partly an artifact of broken test data. Lesson logged: when a
+vision module fails, check what the picture *actually shows* before blaming the algorithm.
 
 ## File 9 — `solver/equivalence.py` — how we *prove* the extraction is right
 

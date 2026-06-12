@@ -106,20 +106,19 @@ so we can build it and *verify it against a known answer* today:
   synthetic tests but will need genuine terminal-stub tracing to survive real hand-drawn
   photos. This is exactly the kind of limitation the writeup should report, not hide.
 
-  **FINDING (attempted adding a horizontal "series-loop" template):** the extractor does NOT
-  yet generalize to new layouts, and the three heuristics are *coupled* — fixing one breaks
-  another (classic whack-a-mole):
-    * The voltage-source symbol has a large bbox whose leads attach far outside it (~50–90px),
-      so its terminals don't find a wire by close-range probing → they fall through to the
-      ground hack, which then wrongly grounds BOTH source terminals in a horizontal layout.
-    * "Follow the lead outward along its axis" probing fixes the source but breaks the
-      junction-free series resistor chains (and vice-versa).
-  **Conclusion:** generalizing wire extraction needs a *principled redesign*, not more patches
-  — most likely: build a proper skeleton GRAPH (nodes = wire endpoints/junctions, edges =
-  traced paths) and snap component terminals onto it, rather than the current
-  blob-proximity + special-case-fallback approach. This is its own focused task and the top
-  Phase-2 hardening priority. (Good news: the `metrics/` harness + `circuit_equivalent` make
-  it instantly measurable, so a redesign can be driven by the accuracy number.)
+  **RESOLVED — skeleton-graph redesign (branch `wire-extraction-redesign`).** The original
+  blob-proximity extractor was layout-overfit (200/200 on the two original templates, 0/30 on
+  a new horizontal layout; coupled heuristics made patching whack-a-mole). The redesign
+  (see `docs/wire_extraction_redesign_plan.md`) builds a real graph of the wires
+  (`vision/skeleton_graph.py`) and matches component terminals to the *cut endpoints* that
+  erasure creates, via four evidence-ordered rules with zero layout assumptions. Results:
+  **200/200 on all three templates** (incl. the previously-impossible series_loop, 30/30) and
+  102 tests green. Investigating the failure also exposed two generator bugs now fixed:
+  the series_divider drawing never visually closed its loop, and value labels had no `text`
+  ground-truth boxes (label ink masqueraded as wire). The old extractor is frozen at
+  `vision/wire_extraction_baseline.py` for before/after comparison — writeup material.
+  `vision/debug_viz.py` renders the extractor's full mental model onto the image for
+  debugging real photos later.
 - **Preprocessing** (`vision/`) — grayscale → adaptive threshold → morphology → clean binary.
 - **End-to-end extraction metric** — graph-isomorphism (networkx) check that an extracted
   netlist is electrically equivalent to ground truth. (Elevation layer #2.)

@@ -103,11 +103,17 @@ def _series_divider(rng: random.Random):
             boxed.append((dot, "junction", f"J{i + 1}", None))
         top_node = bottom_node
 
-    # Wire back along the bottom to the source, and a ground symbol.
-    d += elm.Line().left().length(3)
+    # Wire back along the bottom to the source, a ground symbol at the corner,
+    # and a wire UP to the source's bottom terminal so the loop is visibly
+    # closed on paper. (An earlier version left this gap — electrically implied
+    # but never drawn — which made the image unextractable from pixels alone
+    # and violated our own drawing convention.)
+    bottom_rail = elm.Line().left().length(3)
+    d += bottom_rail
     gnd = elm.Ground()
     d += gnd
     boxed.append((gnd, "ground", "GND", None))
+    d += elm.Line().at(bottom_rail.end).to(src.start)
 
     return d, netlist, boxed
 
@@ -170,7 +176,49 @@ def _parallel_bank(rng: random.Random):
     return d, netlist, boxed
 
 
-TEMPLATES = [_series_divider, _parallel_bank]
+def _series_loop(rng: random.Random):
+    """A source on the left driving a chain of HORIZONTAL resistors.
+
+    Layout: source standing on the left; resistors marching right along the
+    top; a wire dropping down the right side and returning along the bottom to
+    a ground at the source's foot. This template exists to keep the vision
+    code honest: it exercises horizontal components (left/right terminals) and
+    a source-lead-to-resistor-lead connection with no junction dot — the exact
+    things the first wire extractor couldn't handle (it scored 0/30 here; see
+    docs/wire_extraction_redesign_plan.md).
+    """
+    k = rng.randint(2, 4)
+    volts = rng.choice(SOURCE_VOLTAGES)
+    netlist = Netlist()
+    boxed = []
+
+    d = schemdraw.Drawing(show=False)
+    src = elm.SourceV().up().label(f"{volts}V")
+    d += src
+    netlist.add("V", "V1", volts, "n1", "0")
+    boxed.append((src, "voltage source", "V1", f"{volts}V"))
+
+    prev = "n1"
+    for i in range(k):
+        val = rng.choice(RESISTOR_VALUES)
+        res = elm.Resistor().right().label(val)
+        d += res
+        nxt = "0" if i == k - 1 else f"n{i + 2}"
+        netlist.add("R", f"R{i + 1}", val, prev, nxt)
+        boxed.append((res, "resistor", f"R{i + 1}", val))
+        prev = nxt
+
+    # Close the loop: down the right edge, back along the bottom, ground at
+    # the source's foot.
+    d += elm.Line().down().toy(src.start)
+    d += elm.Line().to(src.start)
+    gnd = elm.Ground().at(src.start)
+    d += gnd
+    boxed.append((gnd, "ground", "GND", None))
+    return d, netlist, boxed
+
+
+TEMPLATES = [_series_divider, _parallel_bank, _series_loop]
 
 
 # --- rendering + ground-truth extraction ------------------------------------
@@ -225,6 +273,24 @@ def generate_one(rng: random.Random):
     for element, kind, name, value in boxed:
         px = _bbox_to_pixels(element.get_bbox(transform=True), fig, ax, width_px, height_px)
         boxes.append(CompBox(name=name, kind=kind, value=value, bbox=px))
+
+    # Ground-truth boxes for the VALUE LABELS too (kind="text"). The real
+    # pipeline detects text as its own class and erases it before tracing
+    # wires — if the synthetic answer key omitted these, label ink would
+    # masquerade as wire. matplotlib knows each rendered label's exact extent
+    # in display coords; map display -> figure fraction -> image pixels (the
+    # same HiDPI-safe route _bbox_to_pixels takes).
+    to_fraction = fig.transFigure.inverted()
+    for i, artist in enumerate(ax.texts):
+        ext = artist.get_window_extent(renderer=fig.canvas.get_renderer())
+        fx0, fy0 = to_fraction.transform((ext.x0, ext.y0))
+        fx1, fy1 = to_fraction.transform((ext.x1, ext.y1))
+        xmin, xmax = sorted((fx0 * width_px, fx1 * width_px))
+        ymin, ymax = sorted(((1 - fy0) * height_px, (1 - fy1) * height_px))
+        boxes.append(CompBox(
+            name=f"TXT{i + 1}", kind="text", value=artist.get_text(),
+            bbox=[round(xmin, 1), round(ymin, 1), round(xmax, 1), round(ymax, 1)],
+        ))
 
     result = solve(netlist)                     # solve it, so the answer key is complete
 

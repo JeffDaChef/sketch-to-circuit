@@ -378,3 +378,81 @@ we can check by hand, plus a tool that manufactures unlimited labeled test circu
 Still ahead, in order: tracing wires from a real image, training the component detector on a
 real dataset, the live camera and overlay, cross-checking our solver against the
 professional simulator, and finally the explain-and-critique and what-if features.
+
+---
+
+# Phase 1 — teaching the machine to *see* components
+
+Phase 0 built the back half of the belt: given a circuit-as-text, we solve it. Phase 1
+builds the **eyes** — the part that looks at a photo of a hand-drawn circuit and says
+"resistor here, battery there." Nothing in Phase 1 runs from a clean drawing we made
+ourselves; it learns from thousands of *real* hand-drawn photos.
+
+## The idea in one breath
+
+A photo is just a grid of coloured dots. To turn dots into "there's a resistor at this
+spot," we train an **object detector** — a program that outputs labelled boxes. We use
+**YOLO** (a fast, popular detector) in its smallest "nano" size, because our drawings are
+simple and we want it to run on a plain laptop. Training means showing the detector
+thousands of example photos where a human already drew the correct boxes, and letting it
+adjust itself until its guesses match. The single file it produces, `best.pt`, *is* the
+trained eyes.
+
+## File 5 — `data_collection/cghd_prep.py` — turning a public dataset into our training set
+
+**Where this fits:** the detector can't learn without labelled examples. A research group
+published **CGHD** — thousands of photos of hand-drawn circuits with every component already
+boxed by humans. But it's labelled for *their* problem (50-plus component types in a format
+called VOC XML), and we only care about *our* 8. This file is the translator.
+
+**What it does, move by move:**
+
+- **Reads the VOC labels.** Each CGHD photo comes with an XML file listing every box and
+  what it is. We read the image's width/height and every `(class, xmin, ymin, xmax, ymax)`
+  straight from that XML — we never even open the image to do the label maths.
+
+- **Remaps the 50-plus classes down to our 8.** A table at the top of the file says, e.g.,
+  `capacitor.unpolarized` and `capacitor.polarized` both become just `capacitor`; both
+  battery and DC-source symbols become `voltage_source`. Anything we don't support
+  (inductors, transistors, logic gates, AC sources…) is simply **dropped**. Our 8 classes,
+  in fixed order, are: capacitor, diode, ground, junction, resistor, switch, text,
+  voltage_source — numbered 0–7.
+
+- **Converts box format.** VOC stores boxes as corner pixels; YOLO wants centre-x, centre-y,
+  width, height, each as a fraction of the image (0–1). Pure arithmetic, done per box.
+
+- **Splits by *person*, not by photo — the important bit.** CGHD has several photos of the
+  same drawing and several drawings by the same person. If we shuffled all photos and
+  randomly held some back to grade ourselves on, we'd be grading the model on drawings it
+  basically already saw — an inflated, dishonest score. Instead we hold back **whole
+  people**: every photo from a given drafter goes entirely into train, or entirely into
+  the test pile, never split. Now the test score answers the real question: *how well does
+  it do on a stranger's handwriting?*
+
+- **Writes a tidy YOLO dataset** — train/val/test folders of images and label files, plus a
+  `data.yaml` that tells YOLO where everything is and names the 8 classes.
+
+It's all standard-library Python and covered by hand-checkable tests (`tests/test_cghd_prep.py`):
+the box maths, the class remap, and — most importantly — a test proving the train/val/test
+people never overlap.
+
+## Files 6 & 7 — `training/train_colab.py` and `training/evaluate.py`
+
+**Why these run somewhere else:** training crunches thousands of images and really wants a
+GPU. This Mac's GPU is awkward to use for this, so training happens on **Google Colab** —
+a free website that lends you a computer with a good GPU for a couple of hours.
+`training/COLAB_INSTRUCTIONS.md` is the click-by-click guide.
+
+- **`train_colab.py`** points YOLO-nano at our `data.yaml` and lets it learn (~1–2 hours),
+  producing `best.pt` — the trained detector.
+
+- **`evaluate.py`** grades that `best.pt` on the held-out *test people* and reports a score
+  called **mAP** (higher is better; it measures how well predicted boxes line up with the
+  human-drawn truth). Because the test people were never trained on, this number is honest.
+
+## Where the build stands now
+
+Written and tested: the dataset translator and the train/evaluate scripts. What's left in
+Phase 1 is the part only a human with a browser can kick off — download CGHD, run the
+training on Colab, and read back the score. After that comes Phase 2: feeding *real* photos
+through detection into the wire-tracing and netlist code.

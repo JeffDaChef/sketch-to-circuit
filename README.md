@@ -26,7 +26,7 @@ Input drawing rules: [`docs/drawing_convention.md`](docs/drawing_convention.md)
 
 - [x] Project brief & plan
 - [x] **Phase 0:** synthetic pipeline — netlist + MNA solver + generator + end-to-end demo (22 tests passing)
-- [ ] Phase 1: train YOLO detector on CGHD dataset
+- [~] **Phase 1:** YOLO detector on CGHD — data-prep + training/eval scripts written & tested (51 tests passing); awaiting dataset download + Colab training run
 - [ ] Phase 2: real hand-drawn photos through the pipeline
 - [ ] Phase 3: live camera + overlay
 - [ ] Phase 4: ngspice validation, extraction metric, LLM explain mode, what-if

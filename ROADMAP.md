@@ -58,6 +58,35 @@ for once the core is solid.
 **Skip** pure-flash additions (fancier overlay animations, more component types) — surface area
 without a defensible idea.
 
+---
+
+## Difficulty levers (potential — bank these, build AFTER the spine works)
+
+The synthetic-only pipeline came together fast because it was *designed* to be the easy 60%
+(clean images we control). The hard part — real hand-drawn photos — is already on the
+roadmap. These levers add *genuine* depth beyond that, ranked by hardness-per-impressiveness:
+
+1. **Lift the no-crossing-wires constraint (research-grade).** v1 bans crossings because
+   handling them is near-research-level. Shipping v1 constrained, then REMOVING the
+   constraint in v2 — detect crossovers (CGHD has a `crossover` class) and thread the
+   skeleton graph through them — upgrades the story from "I constrained the problem" to
+   "…and then I lifted the constraint."
+2. **Transient simulation + true nonlinear diodes (deep math).** Time-domain solving
+   (backward-Euler/trapezoidal, companion models) plus Newton-Raphson on the exponential
+   diode equation instead of the planned fixed-2V LED shortcut. Turns the solver into a
+   serious numerical engine; every piece is whiteboard-defensible.
+3. **Noise-robustness study (rigor + Phase-2 prep).** Systematically corrupt synthetic
+   images (blur, wobble/elastic distortion, lighting gradients, stroke thinning) and publish
+   the accuracy-vs-corruption-severity curve. Predicts what real photos will break, in
+   advance, with numbers.
+4. **The human moat (unchanged, still #1 overall):** ~35 own drawings + domain-adaptation
+   delta, whiteboard-level command of MNA, the mini-paper with ablations + error taxonomy,
+   a competition entry.
+
+Ordering: finish the spine first (detector → real photos → live camera). Then #2 (mostly
+leveraged off the existing solver), then #1 as the headline stretch, #3 woven in along the
+way. Difficulty added to an unfinished project reads as scattered.
+
 > Sequencing note: "trust" comes from the ngspice validation + honest metric, which are nearly
 > *free* given the solver already works. "Wow" comes from transient sim. Build trust first.
 

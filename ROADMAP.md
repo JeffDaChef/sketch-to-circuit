@@ -119,6 +119,18 @@ so we can build it and *verify it against a known answer* today:
   `vision/wire_extraction_baseline.py` for before/after comparison — writeup material.
   `vision/debug_viz.py` renders the extractor's full mental model onto the image for
   debugging real photos later.
+
+  **Post-redesign adversarial poke (same branch):** probing with two more unseen layouts
+  (corner-turning chain: 7/30; mirrored loop: 16/30) exposed two real weaknesses, both fixed:
+  (1) matching caps scaled with *image* size but the relevant geometry scales with *component*
+  size — caps now derive from the median component box length; (2) the touching-terminals rule
+  required both terminals unresolved — now a two-tier rule lets a resolved terminal connect an
+  unresolved neighbour at tight range (ground symbol pressed against a source's foot). After
+  the fixes: 30/30 on ALL unseen layouts, kept as permanent guards in
+  `tests/test_wire_extraction_generalization.py` (104 tests green, official metric 200/200).
+  Also caught: my own probe script initially drew a short-circuit (wire through a component
+  body) — the extractor read that drawing *correctly* and the "failure" was the test's. Same
+  lesson as the generator bugs: verify what the picture shows before blaming the algorithm.
 - **Preprocessing** (`vision/`) — grayscale → adaptive threshold → morphology → clean binary.
 - **End-to-end extraction metric** — graph-isomorphism (networkx) check that an extracted
   netlist is electrically equivalent to ground truth. (Elevation layer #2.)

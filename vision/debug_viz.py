@@ -73,15 +73,21 @@ def save_debug_image(image: np.ndarray, components: list[dict],
         x, y = rec["point"]
         comp_name = rec["comp"]["name"]
         net = info["terminal_nets"].get(f"{comp_name}_{rec['side']}", "0?")
-        colour = "tab:blue" if rec["claimed"] else (
-            "purple" if rec["on_junction"] else "crimson")
+        if rec["claimed"]:
+            colour = "tab:blue"               # matched to a cut wire endpoint
+        elif rec["on_junction"]:
+            colour = "purple"                 # connected through a junction dot
+        elif rec.get("touch_matched"):
+            colour = "darkorange"             # connected by terminal adjacency
+        else:
+            colour = "crimson"                # genuinely unresolved
         ax.plot(x, y, "x", color=colour, markersize=8, markeredgewidth=2)
         ax.annotate(f"{comp_name}.{rec['side']}={net}", (x, y),
                     textcoords="offset points", xytext=(5, 5),
                     fontsize=7, color=colour)
 
-    ax.set_title("wire-extraction debug — blue=x face-matched, "
-                 "purple=x junction, crimson=x unresolved; red ◯ = cut endpoint")
+    ax.set_title("wire-extraction debug — x: blue=face-matched, purple=junction, "
+                 "orange=terminal-adjacency, crimson=unresolved; red ◯ = cut endpoint")
     ax.set_xlim(0, w)
     ax.set_ylim(h, 0)
     ax.axis("off")

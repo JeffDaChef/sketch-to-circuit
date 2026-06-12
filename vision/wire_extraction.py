@@ -264,15 +264,24 @@ def extract_netlist(
     if isinstance(image, Image.Image):
         image = np.asarray(image)
     h, w = image.shape[:2]
-    diag = math.hypot(w, h)
+
+    # All matching distances scale with COMPONENT size, not image size: the
+    # geometry that matters (lead lengths, symbol spacing) is set by how big
+    # the circuit elements are drawn, and the same circuit can be rendered at
+    # many pixels-per-element. S = the median long side of the component
+    # boxes ~= one element's drawn length.
+    sides = [max(c["bbox"][2] - c["bbox"][0], c["bbox"][3] - c["bbox"][1])
+             for c in components if c["kind"] in KIND_MAP]
+    scale = float(np.median(sides)) if sides else 0.1 * math.hypot(w, h)
 
     if match_radius is None:
-        match_radius = max(6, int(0.01 * diag))
+        match_radius = max(6, int(0.08 * scale))
 
     _MARGIN = 4                                   # erase margin (px)
     _JUNCTION_TOUCH = 5                           # junction-to-bbox contact (px)
-    _TT_CAP = max(40, int(0.05 * diag))           # touching-terminals cap
-    _RESCUE_CAP = max(80, int(0.09 * diag))       # region-rescue cap
+    _TT_CAP = max(40, int(0.35 * scale))          # touching-terminals cap
+    _TT_TIGHT = max(16, int(0.20 * scale))        # ...when one side has wire evidence
+    _RESCUE_CAP = max(80, int(0.60 * scale))      # region-rescue cap
 
     # --- steps 1-3: ink -> erased -> skeleton graph -----------------------
     ink = _to_ink_mask(image)
@@ -318,7 +327,7 @@ def extract_netlist(
                 "key": f"term_{comp['name']}_{side}",
                 "comp": comp, "side": side, "point": point,
                 "region": _regions_near(regions, point[0], point[1]),
-                "claimed": False, "on_junction": False,
+                "claimed": False, "on_junction": False, "touch_matched": False,
             })
     for comp in gnd_symbols:
         xmin, ymin, xmax, ymax = comp["bbox"]
@@ -378,19 +387,31 @@ def extract_netlist(
                 nearest["on_junction"] = True
 
     # --- step 5, rule (3): TOUCHING TERMINALS -------------------------------
-    # Two unconnected terminals of different components, close together inside
-    # one merged region: their joining wire was swallowed by the erasure.
-    unclaimed = [r for r in records if not r["claimed"] and not r["on_junction"]]
-    for i, a in enumerate(unclaimed):
-        for b in unclaimed[i + 1:]:
+    # Two terminals of different components, close together inside one merged
+    # region: their joining wire was swallowed by the erasure, so adjacency IS
+    # the connection evidence.  Two tiers:
+    #   * both still unresolved -> connect within the normal cap;
+    #   * one already wire-matched -> connect only at TIGHT range (2x match
+    #     radius): terminals that practically touch are connected no matter
+    #     what, but a resolved terminal shouldn't pull in merely-nearby ones.
+    #     (Found by poking: a ground symbol pressed against a source's foot
+    #     must inherit its net even after the source matched a wire.)
+    open_recs = [r for r in records if not r["on_junction"]]
+    for i, a in enumerate(open_recs):
+        for b in open_recs[i + 1:]:
             if a["comp"]["name"] == b["comp"]["name"]:
                 continue                      # never short one component
+            if a["claimed"] and b["claimed"]:
+                continue                      # both already have wire evidence
             if not (a["region"] & b["region"]):
                 continue
             d = math.hypot(a["point"][0] - b["point"][0],
                            a["point"][1] - b["point"][1])
-            if d <= _TT_CAP:
+            cap = _TT_CAP if not (a["claimed"] or b["claimed"]) \
+                else _TT_TIGHT
+            if d <= cap:
                 uf.union(a["key"], b["key"])
+                a["touch_matched"] = b["touch_matched"] = True
 
     # --- step 5, rule (4): REGION RESCUE ------------------------------------
     # A terminal with no wire evidence and no junction takes the single

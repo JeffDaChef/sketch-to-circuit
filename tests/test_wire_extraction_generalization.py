@@ -69,21 +69,108 @@ def render(d, boxed):
     return image, comps
 
 
-def run_one(seed: int) -> bool:
-    rng = random.Random(seed)
-    d, truth, boxed = make_series_loop(rng)
-    image, comps = render(d, boxed)
-    extracted = extract_netlist(image, comps)
-    return circuit_equivalent(extracted, truth)
+def make_corner_chain(rng: random.Random):
+    """A chain that TURNS A CORNER: resistors right along the top, then DOWN.
+
+    Mixes horizontal and vertical components in one chain — found 23/30 broken
+    during adversarial poking (component-scaled caps fixed it).
+    """
+    import schemdraw
+    import schemdraw.elements as elm
+    from data_collection.synthetic import RESISTOR_VALUES, SOURCE_VOLTAGES
+
+    k_across, k_down = rng.randint(1, 2), rng.randint(1, 2)
+    volts = rng.choice(SOURCE_VOLTAGES)
+    netlist = Netlist()
+    boxed = []
+    d = schemdraw.Drawing(show=False)
+    src = elm.SourceV().up().label(f"{volts}V")
+    d += src
+    netlist.add("V", "V1", volts, "n1", "0")
+    boxed.append((src, "voltage source", "V1", f"{volts}V"))
+    prev, idx = "n1", 1
+    for _ in range(k_across):
+        val = rng.choice(RESISTOR_VALUES)
+        r = elm.Resistor().right().label(val)
+        d += r
+        nxt = f"n{idx + 1}"
+        netlist.add("R", f"R{idx}", val, prev, nxt)
+        boxed.append((r, "resistor", f"R{idx}", val))
+        prev, idx = nxt, idx + 1
+    for j in range(k_down):
+        val = rng.choice(RESISTOR_VALUES)
+        r = elm.Resistor().down().label(val)
+        d += r
+        nxt = "0" if j == k_down - 1 else f"n{idx + 1}"
+        netlist.add("R", f"R{idx}", val, prev, nxt)
+        boxed.append((r, "resistor", f"R{idx}", val))
+        prev, idx = nxt, idx + 1
+    d += elm.Line().tox(src.start)          # rail LEFT along the chain's bottom
+    d += elm.Line().toy(src.start)          # then UP to the source's foot
+    gnd = elm.Ground().at(src.start)
+    d += gnd
+    boxed.append((gnd, "ground", "GND", None))
+    return d, netlist, boxed
 
 
-def test_series_loop_generalization():
-    """The redesign's definition of done: >=28/30 on the unseen layout."""
-    results = [run_one(seed) for seed in range(N_SEEDS)]
+def make_mirrored_loop(rng: random.Random):
+    """series_loop MIRRORED: source on the RIGHT, resistors marching LEFT.
+
+    Found 14/30 broken during poking: the ground symbol sits ~30 px from the
+    source's foot with all nearby wire erased — the two-tier touching-terminals
+    rule (claimed<->unclaimed at tight range) fixed it.
+    """
+    import schemdraw
+    import schemdraw.elements as elm
+    from data_collection.synthetic import RESISTOR_VALUES, SOURCE_VOLTAGES
+
+    k = rng.randint(2, 4)
+    volts = rng.choice(SOURCE_VOLTAGES)
+    netlist = Netlist()
+    boxed = []
+    d = schemdraw.Drawing(show=False)
+    src = elm.SourceV().up().label(f"{volts}V")
+    d += src
+    netlist.add("V", "V1", volts, "n1", "0")
+    boxed.append((src, "voltage source", "V1", f"{volts}V"))
+    prev = "n1"
+    for i in range(k):
+        val = rng.choice(RESISTOR_VALUES)
+        r = elm.Resistor().left().label(val)
+        d += r
+        nxt = "0" if i == k - 1 else f"n{i + 2}"
+        netlist.add("R", f"R{i + 1}", val, prev, nxt)
+        boxed.append((r, "resistor", f"R{i + 1}", val))
+        prev = nxt
+    d += elm.Line().down().toy(src.start)
+    d += elm.Line().to(src.start)
+    gnd = elm.Ground().at(src.start)
+    d += gnd
+    boxed.append((gnd, "ground", "GND", None))
+    return d, netlist, boxed
+
+
+LAYOUTS = {
+    "series_loop": make_series_loop,
+    "corner_chain": make_corner_chain,
+    "mirrored_loop": make_mirrored_loop,
+}
+
+
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+def test_generalization(layout):
+    """Unseen-layout guard: >=28/30 per layout or the extractor is overfit."""
+    maker = LAYOUTS[layout]
+    results = []
+    for seed in range(N_SEEDS):
+        rng = random.Random(seed)
+        d, truth, boxed = maker(rng)
+        image, comps = render(d, boxed)
+        results.append(circuit_equivalent(extract_netlist(image, comps), truth))
     passes = sum(results)
     failing = [s for s, ok in enumerate(results) if not ok]
-    print(f"\nseries_loop generalization: {passes}/{N_SEEDS} (failing seeds: {failing})")
+    print(f"\n{layout} generalization: {passes}/{N_SEEDS} (failing seeds: {failing})")
     assert passes >= MIN_PASSES, (
-        f"Only {passes}/{N_SEEDS} series_loop circuits extracted correctly "
+        f"Only {passes}/{N_SEEDS} {layout} circuits extracted correctly "
         f"(failing seeds: {failing}). The extractor is layout-overfit again."
     )

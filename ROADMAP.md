@@ -99,12 +99,27 @@ synthetic generator (which gives us images + ground-truth boxes + the known-corr
 so we can build it and *verify it against a known answer* today:
 
 - **Wire extraction** (`vision/`) — the hardest module; built and passing on synthetic images
-  (60/60 fresh seeds recover the correct netlist). ✅ first version done.
+  (200/200 recover the correct netlist on the two existing templates). ✅ first version done.
   **Known limitations to revisit in Phase 2 (honest failure modes):**
   (a) the ground "x-column overlap" fallback and (b) the junction top/bottom-half rule both
   assume the synthetic layout (vertical components, ground directly below). They pass all
   synthetic tests but will need genuine terminal-stub tracing to survive real hand-drawn
   photos. This is exactly the kind of limitation the writeup should report, not hide.
+
+  **FINDING (attempted adding a horizontal "series-loop" template):** the extractor does NOT
+  yet generalize to new layouts, and the three heuristics are *coupled* — fixing one breaks
+  another (classic whack-a-mole):
+    * The voltage-source symbol has a large bbox whose leads attach far outside it (~50–90px),
+      so its terminals don't find a wire by close-range probing → they fall through to the
+      ground hack, which then wrongly grounds BOTH source terminals in a horizontal layout.
+    * "Follow the lead outward along its axis" probing fixes the source but breaks the
+      junction-free series resistor chains (and vice-versa).
+  **Conclusion:** generalizing wire extraction needs a *principled redesign*, not more patches
+  — most likely: build a proper skeleton GRAPH (nodes = wire endpoints/junctions, edges =
+  traced paths) and snap component terminals onto it, rather than the current
+  blob-proximity + special-case-fallback approach. This is its own focused task and the top
+  Phase-2 hardening priority. (Good news: the `metrics/` harness + `circuit_equivalent` make
+  it instantly measurable, so a redesign can be driven by the accuracy number.)
 - **Preprocessing** (`vision/`) — grayscale → adaptive threshold → morphology → clean binary.
 - **End-to-end extraction metric** — graph-isomorphism (networkx) check that an extracted
   netlist is electrically equivalent to ground truth. (Elevation layer #2.)

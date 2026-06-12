@@ -26,8 +26,8 @@ Input drawing rules: [`docs/drawing_convention.md`](docs/drawing_convention.md)
 
 - [x] Project brief & plan
 - [x] **Phase 0:** synthetic pipeline — netlist + MNA solver + generator + end-to-end demo (22 tests passing)
-- [~] **Phase 1:** YOLO detector on CGHD — data-prep + training/eval scripts written & tested (51 tests passing); awaiting dataset download + Colab training run
-- [ ] Phase 2: real hand-drawn photos through the pipeline
+- [~] **Phase 1:** YOLO detector on CGHD — data-prep + training/eval scripts written & tested; awaiting dataset download + Colab training run
+- [~] **Phase 2:** wire extraction — recovers the netlist from an image + boxes; 60/60 synthetic circuits correct (graph-isomorphism checked). Two template-specific heuristics flagged for real-photo hardening (see ROADMAP.md). 84 tests passing.
 - [ ] Phase 3: live camera + overlay
 - [ ] Phase 4: ngspice validation, extraction metric, LLM explain mode, what-if
 - [ ] Phase 5: domain adaptation on my own drawings

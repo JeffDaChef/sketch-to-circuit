@@ -456,3 +456,69 @@ Written and tested: the dataset translator and the train/evaluate scripts. What'
 Phase 1 is the part only a human with a browser can kick off — download CGHD, run the
 training on Colab, and read back the score. After that comes Phase 2: feeding *real* photos
 through detection into the wire-tracing and netlist code.
+
+---
+
+# Phase 2 (started) — tracing the wires: from a picture to a circuit
+
+This is the module the brief calls *the hardest one*, and we built its first version now —
+against the synthetic generator, where we already know the right answer for every image, so
+we can prove it works before any messy real photo shows up.
+
+## The problem in one sentence
+
+The detector (Phase 1) tells us *what* components are in the picture and *where their boxes
+are*. It does **not** tell us *what's wired to what* — and a circuit is nothing but its
+wiring. Wire extraction fills that gap: given the image plus the component boxes, figure out
+the connections and emit a netlist (the same text format the solver already eats).
+
+## File 8 — `vision/wire_extraction.py`
+
+**The trick that makes it tractable:** we never have to recognise the squiggle inside a box.
+We *erase* every component box from the image — leaving only the bare wires — and then study
+what those wires connect. Here's the assembly line:
+
+1. **Black-and-white.** Convert the photo to a clean "ink / not-ink" mask (Otsu thresholding
+   picks the cutoff automatically).
+2. **Erase the components.** Blank out every component's rectangle (resistors, sources,
+   ground, junction dots, text). What's left is *only wire*.
+3. **Skeletonise.** Thin every wire down to a 1-pixel-wide centreline, so a fat marker stroke
+   and a thin one look the same — just a path.
+4. **Find wire blobs.** Each separate connected run of wire pixels is one "fragment." Anything
+   touching the same fragment is electrically the same point.
+5. **Guess the terminals.** A two-ended component's wire connects at the two ends of its box
+   (a tall box → top and bottom; a wide box → left and right). We *infer* the terminals from
+   the box shape — we don't need the detector to tell us where the pins are.
+6. **Join it all up (union-find).** Each terminal is glued to the wire fragment it touches;
+   each **junction dot** glues together everything sitting under it. Whatever ends up in one
+   group is one electrical "net." The group holding the ground symbol becomes net "0".
+7. **Write the netlist.** For every component, record "connects net A to net B" — and that's a
+   netlist the solver can read.
+
+**Honest limitations (on purpose — this is the rigorous part).** Two of the rules above are
+currently tuned to the *synthetic* drawings: a "ground is in the same column" shortcut, and a
+junction rule that assumes components stand vertically. They make all synthetic tests pass,
+but they'll need real wire-stub tracing to survive *hand-drawn* photos. We're writing this
+down rather than hiding it — reporting where it will break is the credible-engineer move, and
+it's already logged in `ROADMAP.md` as Phase-2 hardening work.
+
+## File 9 — `solver/equivalence.py` — how we *prove* the extraction is right
+
+How do we know the extracted netlist matches the true one, when the node names and component
+values won't line up exactly? We compare the two circuits as **graphs** and ask: *are these
+the same shape?* Nodes are nets, edges are components labelled by type, and the ground node
+must map to the ground node. If the two graphs are **isomorphic** under those rules, the
+circuits are electrically the same — regardless of how we named things. networkx does the
+heavy lifting.
+
+This `circuit_equivalent()` check is doing double duty: it's our test oracle now, and it's
+*also* the "self-defined end-to-end extraction metric" the brief wants for Phase 4 — the
+honest headline number ("fraction of drawings whose netlist comes out electrically correct").
+
+## Where the build stands now
+
+Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
+**wire extraction** → netlist → solver, with a graph-isomorphism check confirming **60 out of
+60** fresh random circuits are recovered correctly (84 tests total). The remaining Phase-2
+work is hardening those two heuristics once we're feeding *real* photographs (which need the
+trained detector from Phase 1, i.e. the dataset).

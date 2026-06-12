@@ -4,3 +4,7 @@ numpy
 networkx
 matplotlib
 pytest
+
+# Phase 2 (vision / wire extraction)
+scikit-image
+scipy

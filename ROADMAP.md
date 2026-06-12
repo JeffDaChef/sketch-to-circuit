@@ -63,6 +63,35 @@ without a defensible idea.
 
 ---
 
+## College-application strengtheners (rigor moves, not features)
+
+These cost little code but read as *research maturity* — the thing that separates "cool AI
+project" from "this person does real work." Layer them on once the spine works:
+
+- **Accuracy-vs-difficulty curve.** Don't report one number — report extraction accuracy
+  *broken down by circuit complexity* (2 components vs 5 vs 8, with/without junctions). "It's
+  98% on simple circuits and degrades to 70% past 6 components" is a real analysis a judge can
+  probe, and it's honest.
+- **Ablation study.** Show a number *with and without* a design choice — e.g. accuracy with the
+  drafter split vs a naive random split (demonstrates the leakage you avoided), or with vs
+  without a preprocessing step. Ablations are the single most "I did science" signal there is.
+- **Formal error taxonomy.** Turn the honest-limitations section into a labelled table: each
+  failure mode (crossing wires, misread junction, terminal-match miss), how often it happens,
+  and a worked example image. This is the credibility centerpiece of the writeup.
+- **Baseline comparison.** Compare your from-scratch result against something off-the-shelf
+  (e.g. a generic detector with no class remap, or the published CGHD mAP) to show your method
+  adds value, not just that it exists.
+- **Hosted / shareable demo.** A tiny web page or recorded pipeline that a stranger can try or
+  watch end-to-end — shows you can *ship*, not just prototype. (Low priority vs the above.)
+- **Reproducibility.** Seeds fixed, `requirements.txt` pinned, a one-command "regenerate all my
+  numbers" script. Quietly signals engineering discipline; also makes the writeup bulletproof.
+
+> The metric infrastructure for most of these already exists: `solver/equivalence.py` +
+> `metrics/` give the accuracy number; the difficulty/ablation cuts are just *grouping* the
+> same runs differently. Cheap rigor.
+
+---
+
 ## What's buildable RIGHT NOW without the CGHD dataset
 
 The dataset only blocks *training the detector*. Everything below is testable against the

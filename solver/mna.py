@@ -71,7 +71,11 @@ def solve(netlist: Netlist) -> SolveResult:
     # Diodes are non-linear; the linear solver can't handle them yet.
     for c in netlist.components:
         if c.kind == "D":
-            raise SolverError(f"{c.name}: diodes/LEDs aren't supported by the linear DC solver yet")
+            raise SolverError(
+                f"{c.name}: diodes/LEDs are non-linear — use "
+                "solver.nonlinear.solve_nonlinear(), which wraps this solver in "
+                "Newton-Raphson iteration"
+            )
 
     # --- decide what the unknowns are ---------------------------------------
     # Unknown set 1: the voltage at each non-ground node.

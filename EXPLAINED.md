@@ -544,10 +544,131 @@ This `circuit_equivalent()` check is doing double duty: it's our test oracle now
 *also* the "self-defined end-to-end extraction metric" the brief wants for Phase 4 — the
 honest headline number ("fraction of drawings whose netlist comes out electrically correct").
 
+## File 10 — `solver/ngspice_validation.py` — how we *prove* our solver's math is right
+
+`equivalence.py` proves the *extraction* is right (did we read the circuit correctly?).
+This proves the *solver* is right (given a circuit, are our voltages and currents correct?).
+The honest way to claim that isn't "trust me" — it's "our numbers match **ngspice**, the
+industry-standard simulator, to six decimal places on every circuit we tried."
+
+The machine that earns that sentence has four steps:
+
+1. **Build a SPICE deck** — write the circuit out as the plain-text format ngspice speaks: a
+   title line, one line per component, then a small `.control` block that says "do the DC
+   operating point (`op`) and print every node voltage and every source current." We print one
+   value per line on purpose — a lone value prints as a clean `v(in) = 5.0`, easy to read back.
+2. **Run ngspice** as a subprocess (`ngspice -b deck.cir`) and capture its text output.
+3. **Parse that output** back into numbers, ignoring ngspice's chatty banners and timing lines
+   (the parser only grabs `name = number` lines). ngspice lowercases names, so we match
+   case-insensitively and map back to our originals.
+4. **Compare** — solve the same circuit with our own `solve()` and diff the two answers within
+   a tolerance loose enough to absorb ngspice's 7-significant-figure printout but tight enough
+   that a real bug would show. A `ComparisonReport` says whether they agree and, if not,
+   exactly which node disagreed and by how much.
+
+One nice detail that fell out for free: our solver *already* reports source current the same
+way ngspice does (current into a delivering source's + terminal is negative — see the
+`test_mna.py` notes), so currents compare directly with no sign-flipping.
+
+**The catch:** ngspice needs a one-time admin install on this Mac, so it isn't here yet. So the
+harness is built to be useful *now*: every step except the actual subprocess call is unit-tested
+by feeding it *canned* ngspice output (realistic banners and all), and the one live test is
+marked "skip unless ngspice is on PATH." The moment ngspice is installed,
+`python -m solver.ngspice_validation` prints the pass/fail table and that live test starts
+running — nothing else to wire up. This is the "trust" half of the roadmap's trust-before-wow
+plan, and it was nearly free because the solver already works.
+
+**Why this isn't a bandaid (checked against the rest of the code):** the only component kinds
+anything in the pipeline ever creates are R, V and I — all of which the harness supports — and
+both the synthetic generator and the wire extractor name their nets with plain alphanumeric
+strings (`n1`, `top`, `0`), which ngspice accepts as-is. The deck format matches the existing
+`Netlist.to_spice()` layout rather than diverging from it. Both sign conventions line up too:
+voltage-source current (verified earlier) *and* current-source direction (our netlist drains
+`nodes[0]`/feeds `nodes[1]`; ngspice's `Iname n+ n- value` drains n+/feeds n- — identical).
+A parametrized test (`test_harness_handles_real_generator_netlists`) feeds netlists straight
+out of the generator templates through the full build→parse→compare path, so if the generator
+ever starts emitting a name or kind the harness can't handle, a test fails loudly.
+
+## File 11 — `solver/transient.py` — watching a capacitor charge over *time*
+
+The DC solver answers "where does the circuit settle?" — one snapshot. This answers "how does
+it get there?" — the voltage at every node as a function of **time**. The showpiece: hook a
+battery to a resistor and a capacitor and watch the capacitor's voltage curve upward in the
+classic RC exponential, instead of just printing its final number.
+
+**The clever part — we did NOT write a second solver.** A capacitor obeys i = C·dv/dt, which
+involves a *rate of change* the DC solver can't express. The standard trick is to chop time
+into small steps `h` and approximate the slope across one step (**backward-Euler**:
+dv/dt ≈ (v_new − v_old)/h). Rearranged, that says a capacitor over one step behaves exactly
+like **a resistor (h/C) in parallel with a current source** set by last step's voltage — its
+"companion model". Both are parts the DC solver already handles, so each instant in time
+becomes an ordinary R/V/I circuit we hand to the *same, already-ngspice-validated* `solve()`.
+We read the new node voltages, update each capacitor's remembered voltage, and step forward.
+No new linear algebra — and because every step is a plain R/V/I circuit, the transient results
+are themselves ngspice-validatable later.
+
+At t = 0 each capacitor holds its initial voltage (default 0 V — an uncharged cap is a short at
+the first instant), found by solving once with the caps pinned as voltage sources. Then we
+march from 0 to `t_stop` in steps of `dt`.
+
+**How we know it's right:** the anchor test compares the simulation against the *analytic* RC
+formula v(t) = V·(1 − e^(−t/RC)) — the one you derive on paper — at every sample. A wrong sign
+in the companion model would make that curve diverge or run backwards, so it's a real
+correctness proof. In the demo (τ = 1 s) the cap reaches **3.151 V at one time constant**
+versus theory's 3.16 V (63.2% of 5 V) — backward-Euler lags by a hair, exactly as expected, and
+the gap shrinks as `dt` does (also tested). `python -m solver.transient` runs the demo and saves
+the charging curve to `rc_charging.png`.
+
+Scope today: capacitors with constant sources (the RC story). Inductors, time-varying sources,
+and trapezoidal integration (more accurate, can ring) are easy follow-ups — the `method` hook is
+already there. Backward-Euler is the default because it's unconditionally stable: it never
+invents oscillations that aren't physically there.
+
+## File 12 — `solver/nonlinear.py` — real diodes via Newton-Raphson
+
+The linear solver can't handle a diode, and the old plan was to fake one as a fixed 2 V drop.
+This does the real thing, using the actual **Shockley diode equation** `I = I_s·(e^(V/nV_t) − 1)`.
+That exponential is what makes a diode *non-linear*: there's no single resistance that describes
+it, so one linear solve can't find the answer.
+
+**Newton-Raphson** is the classic way to solve a curved equation: guess, draw the *tangent
+line* at your guess, jump to where the tangent crosses your target, repeat. The beautiful part
+for us is that a tangent line — a straight current-vs-voltage relationship — is *exactly* a
+resistor (its slope) in parallel with a current source (its offset). That's the **same
+companion-model move** as the capacitor in transient.py. So every Newton iteration becomes an
+ordinary R/V/I circuit handed to the same ngspice-validated `solve()`: linearize each diode at
+the current guess, solve, read the new diode voltages, redraw the tangents, repeat until the
+voltages stop moving. Three solvers now (DC, transient, non-linear) and only *one* piece of
+linear algebra under all of them.
+
+**Voltage limiting** is the one subtlety. The exponential is so steep that an early guess
+overshooting by half a volt changes the current by ~e^20 — Newton-Raphson would diverge or
+overflow. Real SPICE uses a scheme called `pnjlim`; we use the same idea in a simpler,
+explainable form: never let a diode's voltage *rise* by more than a small step per iteration
+(the only direction the exponential runs away in). Near the solution the natural step is tiny,
+so the limit only bites during the wild early iterations.
+
+**How we know it's right:** the anchor test is a *self-consistency* check — at the converged
+answer, the current the diode equation predicts (from the diode voltage) must equal the current
+Ohm's law predicts through the series resistor. Both laws holding at once means the operating
+point is genuinely correct, with no hardcoded number. The demo bears it out: a silicon diode
+behind a 1 kΩ from 5 V settles at **0.693 V / 4.31 mA** (the famous "~0.7 V drop"), and an LED
+behind 220 Ω lands at **1.805 V / 14.5 mA** (LEDs glow around 1.8–2 V). `python -m
+solver.nonlinear` prints both.
+
+Scope: DC operating point with diodes/LEDs, forward and reverse. No Zener/breakdown yet. A
+natural next step combines this with transient (Newton-Raphson *inside* each time step) for
+diode+capacitor circuits — that's the roadmap's "transient + true non-linear diodes" lever.
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
-**wire extraction** → netlist → solver, with a graph-isomorphism check confirming **60 out of
-60** fresh random circuits are recovered correctly (84 tests total). The remaining Phase-2
-work is hardening those two heuristics once we're feeding *real* photographs (which need the
-trained detector from Phase 1, i.e. the dataset).
+**wire extraction** → netlist → solver, with a graph-isomorphism check confirming the recovered
+circuits are correct, **plus** an ngspice validation harness that (once ngspice is installed)
+confirms our solver agrees with the industry-standard simulator, **plus** a time-domain
+(transient) solver that animates RC charging and matches the analytic curve, **plus** a
+non-linear DC solver doing real diodes/LEDs via Newton-Raphson. The solver core is now a genuine
+little numerical engine — DC, transient, and non-linear, all built on one validated linear
+solve. 134 tests pass, 1 skipped (the live ngspice run, waiting on the install). The remaining
+Phase-2 work is hardening the extraction heuristics once we're feeding *real* photographs (which
+need the trained detector from Phase 1, i.e. the dataset).

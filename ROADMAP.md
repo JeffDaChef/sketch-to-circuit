@@ -81,8 +81,11 @@ roadmap. These levers add *genuine* depth beyond that, ranked by hardness-per-im
    exponential Shockley diode equation (`solver/nonlinear.py`) instead of the planned fixed-2V
    shortcut. Both reuse the validated linear `solve()` via companion models — the solver core is
    now a real numerical engine (DC + transient + non-linear) on one piece of linear algebra.
-   **Still open:** combine the two (Newton-Raphson *inside* each transient time step) for
-   diode+capacitor circuits; inductors; time-varying sources; trapezoidal integration.
+   ✅ **Combined too:** transient now runs Newton-Raphson *inside* each time step when diodes
+   are present, plus time-varying sources (`sine()` helper) — so a **half-wave rectifier with a
+   smoothing capacitor** simulates end-to-end (output 4.28 V, sub-volt ripple; `rectifier.png`).
+   That one demo exercises all three solvers at once. **Still open:** inductors (need an 'L'
+   kind); trapezoidal integration (`method` hook ready); a *live* animated curve for the demo.
 3. **Noise-robustness study (rigor + Phase-2 prep).** Systematically corrupt synthetic
    images (blur, wobble/elastic distortion, lighting gradients, stroke thinning) and publish
    the accuracy-vs-corruption-severity curve. Predicts what real photos will break, in

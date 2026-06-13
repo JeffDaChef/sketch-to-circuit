@@ -674,6 +674,31 @@ Scope: DC operating point with diodes/LEDs, forward and reverse. No Zener/breakd
 natural next step combines this with transient (Newton-Raphson *inside* each time step) for
 diode+capacitor circuits — that's the roadmap's "transient + true non-linear diodes" lever.
 
+## File 13 — `solver/spice_export.py` — opening the circuit in *real* EDA software
+
+Everything so far keeps circuits inside our own world. This file lets one leave: it writes a
+complete SPICE `.cir` file that **ngspice, LTspice, or KiCad** can open and simulate unchanged.
+That's the bridge from "toy I built" to "it speaks the same language professional tools do" — an
+extracted hand-drawn circuit can be exported and handed to industry software.
+
+`Netlist.to_spice()` already existed, but it writes a deliberately bare format for our *own*
+round-trip. A real EDA file needs three things more, which this adds:
+
+1. **Diodes need a named model.** SPICE doesn't put a diode's physics on the element line; it
+   writes `D1 anode cathode DMODEL1` and a separate `.model DMODEL1 D(Is=1e-14 N=1)`. We emit
+   those, pulling the parameters straight from the same `DiodeModel` the non-linear solver uses,
+   and de-duplicate identical models so two plain silicon diodes share one declaration.
+2. **Human-readable values.** `10000` becomes `10k`, `1e-4` becomes `100u`. The one trap here is
+   that SPICE uses `MEG` for mega and `m` for milli — write `1M` for a megaohm and the tool
+   silently reads a *milliohm*. We always emit `MEG`, and a test pins it. The formatter is built
+   so `parse_value(format_value(x)) == x`, i.e. what we write reads back identically.
+3. **An optional analysis line** (`.op`, `.tran 10u 20m`, `.dc V1 0 5 0.1`) so the file actually
+   *runs* on open instead of being an inert parts list.
+
+The non-diode lines stay in the same `name n+ n- value` shape as `to_spice`, so that part of the
+output is still valid for our own parser too. `python -m solver.spice_export` prints an exported
+LED circuit so the format is visible.
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
@@ -685,6 +710,7 @@ non-linear DC solver doing real diodes/LEDs via Newton-Raphson — and these com
 runs Newton-Raphson inside each time step and accepts time-varying sources, so a half-wave
 rectifier with a smoothing capacitor simulates end-to-end. The solver core is now a genuine
 little numerical engine — DC, transient, and non-linear, all built on one validated linear
-solve. 139 tests pass, 1 skipped (the live ngspice run, waiting on the install). The remaining
-Phase-2 work is hardening the extraction heuristics once we're feeding *real* photographs (which
-need the trained detector from Phase 1, i.e. the dataset).
+solve — and circuits can now be **exported to a runnable SPICE `.cir`** that ngspice/LTspice/
+KiCad open directly. 156 tests pass, 1 skipped (the live ngspice run, waiting on the install).
+The remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
+photographs (which need the trained detector from Phase 1, i.e. the dataset).

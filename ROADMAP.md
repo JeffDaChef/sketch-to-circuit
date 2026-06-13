@@ -55,8 +55,11 @@ for once the core is solid.
   past "LED with no resistor" to the actual number: "this LED sees ~45 mA vs its 20 mA rating
   → it burns out; add ~220 Ω." Genuinely useful homework tool = a better essay story than
   "it detects components."
-- **Export to a real netlist (SPICE/KiCad).** Let the extracted circuit open in real EDA
-  software. Bridges the toy to the actual engineering ecosystem.
+- **Export to a real netlist (SPICE/KiCad).** ✅ **Built** (`solver/spice_export.py`). Writes a
+  complete, runnable SPICE `.cir` — proper diode `.model` lines (deduped), engineering-notation
+  values (`10k`/`100u`, correct `MEG`-vs-`m`), and an optional analysis directive (`.op`/`.tran`/
+  `.dc`). Opens unchanged in ngspice/LTspice/KiCad. `parse_value(format_value(x))==x` is pinned by
+  test. 17 tests. Bridges the toy to the actual engineering ecosystem.
 - **Confidence-aware detection.** Surface "60% sure this is a capacitor" and let the user
   correct it. Calibration/uncertainty is a research-grade idea and makes the UI honest.
 

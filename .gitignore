@@ -6,9 +6,10 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Generated output (synthetic images, debug renders, etc.)
+# Generated output (synthetic images, debug renders, demo plots, etc.)
 synth_out/
 debug_out/
+rc_charging.png
 
 # Phase 1: raw dataset, prepped YOLO dataset, training runs, model weights
 # (large/binary — keep them out of git; see training/COLAB_INSTRUCTIONS.md)

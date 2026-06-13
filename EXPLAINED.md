@@ -619,10 +619,24 @@ versus theory's 3.16 V (63.2% of 5 V) — backward-Euler lags by a hair, exactly
 the gap shrinks as `dt` does (also tested). `python -m solver.transient` runs the demo and saves
 the charging curve to `rc_charging.png`.
 
-Scope today: capacitors with constant sources (the RC story). Inductors, time-varying sources,
-and trapezoidal integration (more accurate, can ring) are easy follow-ups — the `method` hook is
-already there. Backward-Euler is the default because it's unconditionally stable: it never
-invents oscillations that aren't physically there.
+**The deep-math lever — diodes *and* time in the same circuit.** Two extras compose onto the
+time loop for free, because of how the companion model works. (1) Once a capacitor is a
+resistor+source for a step, that step is just an R/V/I/**D** circuit — so if any diodes are
+present we solve each step with `solve_nonlinear` (Newton-Raphson) instead of the linear solve.
+The time loop becomes SPICE's *outer* loop and Newton-Raphson the *inner* loop, exactly as the
+real thing does it. (2) Pass `sources={"V1": sine(5, 60)}` and a source takes a time-varying
+value at each instant. Put those together and you can simulate a **half-wave rectifier with a
+smoothing capacitor**: a 60 Hz sine drives a diode into a cap and load resistor; the cap charges
+near each positive peak and trickles down through the load between peaks, giving a (mostly) DC
+output with a little ripple. The demo lands the output at **4.28 V** (5 V minus one ~0.7 V diode
+drop) with sub-volt ripple — and `python -m solver.transient` saves `rectifier.png` showing the
+smoothed output riding on top of the raw sine. That single picture exercises all three solvers at
+once: time-stepping, Newton-Raphson, and the linear core underneath both.
+
+Scope today: capacitors, optionally with diodes and/or time-varying sources. Inductors and
+trapezoidal integration (more accurate, can ring) are the remaining easy follow-ups — the
+`method` hook is already there. Backward-Euler is the default because it's unconditionally
+stable: it never invents oscillations that aren't physically there.
 
 ## File 12 — `solver/nonlinear.py` — real diodes via Newton-Raphson
 
@@ -667,8 +681,10 @@ Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth box
 circuits are correct, **plus** an ngspice validation harness that (once ngspice is installed)
 confirms our solver agrees with the industry-standard simulator, **plus** a time-domain
 (transient) solver that animates RC charging and matches the analytic curve, **plus** a
-non-linear DC solver doing real diodes/LEDs via Newton-Raphson. The solver core is now a genuine
+non-linear DC solver doing real diodes/LEDs via Newton-Raphson — and these compose: transient
+runs Newton-Raphson inside each time step and accepts time-varying sources, so a half-wave
+rectifier with a smoothing capacitor simulates end-to-end. The solver core is now a genuine
 little numerical engine — DC, transient, and non-linear, all built on one validated linear
-solve. 134 tests pass, 1 skipped (the live ngspice run, waiting on the install). The remaining
+solve. 139 tests pass, 1 skipped (the live ngspice run, waiting on the install). The remaining
 Phase-2 work is hardening the extraction heuristics once we're feeding *real* photographs (which
 need the trained detector from Phase 1, i.e. the dataset).

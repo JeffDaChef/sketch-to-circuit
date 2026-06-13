@@ -11,7 +11,7 @@ import math
 import pytest
 
 from solver.netlist import Netlist
-from solver.transient import TransientError, solve_transient
+from solver.transient import TransientError, sine, solve_transient
 
 
 def rc_circuit(R="1k", C=1e-3, V="5"):
@@ -86,3 +86,63 @@ def test_rejects_bad_step():
 def test_rejects_unknown_initial_condition():
     with pytest.raises(TransientError, match="unknown capacitor"):
         solve_transient(rc_circuit(), t_stop=1.0, dt=0.01, initial_conditions={"C9": 1.0})
+
+
+# --- the deep-math lever: time-varying sources + diodes in transient ---------
+
+def test_sine_helper():
+    w = sine(amplitude=2.0, freq_hz=1.0, offset=1.0)
+    assert w(0.0) == pytest.approx(1.0)                  # offset + 2·sin(0)
+    assert w(0.25) == pytest.approx(3.0)                 # quarter period -> +amplitude
+    assert w(0.75) == pytest.approx(-1.0)                # three-quarter -> −amplitude
+
+
+def test_time_varying_source_drives_the_node():
+    # V source = sine across node 'a' to ground, with a resistor to ground. The
+    # ideal source pins node 'a', so V(a, t) must equal the sine at every sample.
+    n = Netlist()
+    n.add("V", "V1", 0.0, "a", "0")
+    n.add("R", "R1", "1k", "a", "0")
+    w = sine(amplitude=3.0, freq_hz=50.0)
+    res = solve_transient(n, t_stop=0.02, dt=0.0005, sources={"V1": w})
+    for t, v in zip(res.times, res.series("a")):
+        assert v == pytest.approx(w(t), abs=1e-9)
+
+
+def test_rejects_unknown_source():
+    with pytest.raises(TransientError, match="unknown source"):
+        solve_transient(rc_circuit(), t_stop=1.0, dt=0.01, sources={"Vnope": sine(1, 1)})
+
+
+def test_peak_detector_holds_the_peak():
+    # Sine -> diode -> cap, NO load: the cap charges toward the input peak (minus
+    # one diode drop) and then HOLDS, because the diode blocks any discharge path.
+    n = Netlist()
+    n.add("V", "V1", 0.0, "ac", "0")
+    n.add("D", "D1", 0.0, "ac", "out")                   # anode 'ac', cathode 'out'
+    n.add("C", "C1", 10e-6, "out", "0")
+    period = 1.0 / 60.0
+    res = solve_transient(n, t_stop=4 * period, dt=period / 200,
+                          sources={"V1": sine(amplitude=5.0, freq_hz=60.0)})
+    out = res.series("out")
+    assert 4.0 < out[-1] < 4.6                            # ~5 V − one silicon drop
+    assert all(b >= a - 1e-3 for a, b in zip(out, out[1:]))  # non-decreasing (no discharge path)
+
+
+def test_half_wave_rectifier_smooths_to_dc():
+    # Sine -> diode -> cap ∥ load: the classic rectifier. Output stays POSITIVE the
+    # whole time (the diode + cap never let it follow the negative half-cycle) and
+    # sits near the peak with a bounded ripple.
+    n = Netlist()
+    n.add("V", "V1", 0.0, "ac", "0")
+    n.add("D", "D1", 0.0, "ac", "out")
+    n.add("C", "C1", 100e-6, "out", "0")
+    n.add("R", "R1", "1k", "out", "0")
+    period = 1.0 / 60.0
+    res = solve_transient(n, t_stop=6 * period, dt=period / 200,
+                          sources={"V1": sine(amplitude=5.0, freq_hz=60.0)})
+    out = res.series("out")
+    settled = out[len(out) // 2:]                         # skip the initial charge-up
+    assert min(settled) > 0.0                             # never follows input negative
+    assert 4.0 < max(settled) < 4.6                       # peak ≈ amplitude − diode drop
+    assert (max(settled) - min(settled)) < 1.0            # cap smooths: ripple under a volt

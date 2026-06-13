@@ -41,11 +41,16 @@ overlay on a real photo, Phases 1–3) **before** adding any of these. A half-wo
 with a flashy feature reads *worse* than a simple one that fully works. These are flourishes
 for once the core is solid.
 
-- ⭐ **Transient simulation (top pick).** The solver currently does DC steady-state only.
-  Extend it to the time domain — watch a capacitor's voltage rise on a live curve as it
-  charges (RC). Real EE depth, builds directly on the existing solver, and a graph animating
-  live is a far stronger demo beat than static numbers. Needs numerical integration
-  (backward-Euler / trapezoidal) and companion models for C/L. ~80% leverages what exists.
+- ⭐ **Transient simulation (top pick).** ✅ **Built** (`solver/transient.py`). Extends the DC
+  solver to the time domain via backward-Euler companion models — each capacitor becomes a
+  resistor ∥ current source per step, so every instant is a plain R/V/I circuit handed to the
+  existing (ngspice-validated) `solve()`. No second solver written. Matches the analytic RC
+  curve (3.151 V vs theory's 3.16 V at one time constant); `python -m solver.transient` saves
+  the charging curve. 7 tests incl. the analytic-curve anchor. **Remaining/follow-ups:**
+  inductors (needs an 'L' kind in the data model), time-varying sources (step/sine inputs),
+  trapezoidal integration (the `method` hook is already in place), and a *live* animated curve
+  for the demo (currently a saved PNG). Companion-model approach means transient results are
+  themselves ngspice-validatable.
 - **Critique that computes consequences.** The planned LLM "explain/critique" mode should go
   past "LED with no resistor" to the actual number: "this LED sees ~45 mA vs its 20 mA rating
   → it burns out; add ~220 Ω." Genuinely useful homework tool = a better essay story than
@@ -71,10 +76,13 @@ roadmap. These levers add *genuine* depth beyond that, ranked by hardness-per-im
    constraint in v2 — detect crossovers (CGHD has a `crossover` class) and thread the
    skeleton graph through them — upgrades the story from "I constrained the problem" to
    "…and then I lifted the constraint."
-2. **Transient simulation + true nonlinear diodes (deep math).** Time-domain solving
-   (backward-Euler/trapezoidal, companion models) plus Newton-Raphson on the exponential
-   diode equation instead of the planned fixed-2V LED shortcut. Turns the solver into a
-   serious numerical engine; every piece is whiteboard-defensible.
+2. **Transient simulation + true nonlinear diodes (deep math).** ✅ **Both built.** Time-domain
+   solving (`solver/transient.py`, backward-Euler companion models) AND Newton-Raphson on the
+   exponential Shockley diode equation (`solver/nonlinear.py`) instead of the planned fixed-2V
+   shortcut. Both reuse the validated linear `solve()` via companion models — the solver core is
+   now a real numerical engine (DC + transient + non-linear) on one piece of linear algebra.
+   **Still open:** combine the two (Newton-Raphson *inside* each transient time step) for
+   diode+capacitor circuits; inductors; time-varying sources; trapezoidal integration.
 3. **Noise-robustness study (rigor + Phase-2 prep).** Systematically corrupt synthetic
    images (blur, wobble/elastic distortion, lighting gradients, stroke thinning) and publish
    the accuracy-vs-corruption-severity curve. Predicts what real photos will break, in
@@ -164,7 +172,23 @@ so we can build it and *verify it against a known answer* today:
 - **End-to-end extraction metric** — graph-isomorphism (networkx) check that an extracted
   netlist is electrically equivalent to ground truth. (Elevation layer #2.)
 - **ngspice validation harness** — compare our MNA solver to ngspice on a suite of circuits.
-  (Elevation layer #1; needs ngspice installed at run time, but the harness can be written now.)
+  (Elevation layer #1.) ✅ **Built** (`solver/ngspice_validation.py`): builds a SPICE deck, runs
+  `ngspice -b`, parses the output, diffs against our `solve()` within tolerance. Deck-building
+  and parsing are unit-tested against canned ngspice output (12 tests); the one live comparison
+  test auto-skips until ngspice is installed (one-time admin step), then runs the hand-checked
+  suite. Run it any time with `python -m solver.ngspice_validation`.
+
+## Hardware notes
+
+- **Mac (M1, 16 GB RAM):** daily dev machine — code, tests, debug. Gets hot under sustained
+  load; do NOT use it for training or heavy inference.
+- **GPU PC (16 GB VRAM):** the right machine for GPU-heavy work. Claude Code isn't on it, but
+  it can run training jobs or serve Ollama.
+- **LLM inference plan:** the planned LLM critique feature (Phase 4) will run via **Ollama on
+  the GPU PC**, not the Anthropic API — zero operating cost. Training (YOLO fine-tuning) can
+  still use Google Colab; that's a separate decision.
+
+---
 
 ## What genuinely needs you (a human)
 

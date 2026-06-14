@@ -892,6 +892,35 @@ logic failure. `python -m metrics.difficulty` reproduces the table and the curve
 that reads as real engineering: the project can tell a benchmark artifact from a true algorithmic
 limit, and it extended a hollow "100%" into a demonstrated, defensible accuracy-vs-size curve.
 
+## File 20 — `solver/ac.py` — frequency-domain analysis (the third question)
+
+The solver could already answer "where does it settle?" (DC) and "how does it get there over
+time?" (transient). This adds the third question every EE asks: **"how does the circuit treat
+each frequency?"** — which is what makes a filter a filter and a tuned circuit resonate. Drive a
+circuit with a sine and, once settled, every voltage is a sine of the same frequency with some
+amplitude and phase shift; AC analysis computes that response across a sweep of frequencies (a
+Bode plot).
+
+The trick is **phasors**, and it's genuinely elegant: represent a sinusoid by one complex number,
+and a capacitor's and inductor's calculus (i = C·dv/dt, v = L·di/dt) collapses into plain complex
+"resistors" called impedances — `Z_C = 1/(jωC)`, `Z_L = jωL`. So AC analysis is the *exact same*
+Modified Nodal Analysis as the DC solver, just run with **complex admittances** (numpy solves
+complex matrices directly). Resistors, caps and inductors now all stamp identically — as one
+complex admittance — which is the whole beauty of the frequency-domain view. (And it's
+self-consistent with the rest: as ω→0 the cap's admittance →0, an open, and the inductor's →∞, a
+short, exactly how the DC solver treats them.)
+
+`transfer_function()` sweeps frequency and returns H(f) = V_out/V_in (magnitude, phase, dB);
+`save_bode_plot()` draws the two-panel Bode plot. **How we know it's right:** the tests are
+anchored to the closed-form filter formulas you derive on paper. An RC low-pass is H = 1/(1+jωRC),
+and the solver nails its signature exactly — at the cutoff f_c = 1/(2πRC) the gain is **0.7071
+(−3 dB) at −45°**, with a clean **−20 dB/decade** rolloff above it. A series-RLC band-pass peaks
+at **|H| = 1.0 at f_0 = 1/(2π√(LC))** and rolls off symmetrically either side. `python -m
+solver.ac` prints those checks and saves `bode_lowpass.png` and `bode_bandpass.png`. The solver
+is now a four-mode engine — **DC, transient, non-linear, and AC** — all on the one MNA core.
+(Scope: linear AC; a diode would need small-signal linearisation around a DC operating point,
+which is refused with a clear error for now.)
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
@@ -912,7 +941,9 @@ switchable backward-Euler/trapezoidal integrator, and the wire extractor now **h
 wires** (the no-crossing-wires constraint is lifted). After an adversarial hardening pass
 (File 18) that fixed a handful of real boundary bugs, and a difficulty study (File 19) that turned
 the hollow "100% on 2–5 components" into a demonstrated *100% up to ~10–12 components* with an
-honest fall-off, **198 tests pass, 1 skipped** (the live ngspice run, waiting on the install). The
-remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
+honest fall-off, **plus** an AC / frequency-domain solver (File 20) that produces verified Bode
+plots — making the engine a four-mode suite (DC, transient, non-linear, AC) — **206 tests pass,
+1 skipped** (the live ngspice run, waiting on the install). The remaining Phase-2 work is
+hardening the extraction heuristics once we're feeding *real*
 photographs (which need the trained detector from Phase 1, i.e. the dataset) — and the noise study
 already says where to start.

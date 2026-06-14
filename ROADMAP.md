@@ -52,6 +52,13 @@ for once the core is solid.
   ablation). **Remaining follow-up:** a *live* animated curve for the demo (currently saved
   PNGs: rc_charging, rlc_ringing, rectifier). Companion-model approach means transient results are
   themselves ngspice-validatable.
+- ⭐ **AC / frequency-domain analysis.** ✅ **Built** (`solver/ac.py`). The same MNA core run with
+  COMPLEX admittances (phasors): `Z_C=1/jωC`, `Z_L=jωL`. Sweeps frequency → transfer function
+  H(f) → Bode plots. Verified against closed-form filters: RC low-pass hits −3 dB / −45° at its
+  cutoff with −20 dB/decade rolloff; series-RLC band-pass peaks at f₀=1/(2π√LC). 8 analytic-anchor
+  tests; `python -m solver.ac` saves `bode_lowpass.png` + `bode_bandpass.png`. Makes the solver a
+  four-mode engine (DC + transient + non-linear + AC). Follow-up: small-signal AC of diode
+  circuits (linearise around the DC operating point).
 - **Critique that computes consequences.** The planned LLM "explain/critique" mode should go
   past "LED with no resistor" to the actual number: "this LED sees ~45 mA vs its 20 mA rating
   → it burns out; add ~220 Ω." Genuinely useful homework tool = a better essay story than

@@ -41,13 +41,14 @@ $PY -m metrics.difficulty --seeds 12 --max-size 12
 hr "5/7  Noise-robustness study (80 circuits/level, seed 0) — takes a few minutes"
 $PY -m metrics.noise_robustness --count 80 --seed 0
 
-hr "6/7  Solver demos (DC transient, nonlinear diodes, SPICE export)"
+hr "6/7  Solver demos (transient, nonlinear diodes, AC/Bode, SPICE export)"
 $PY -m solver.transient
 $PY -m solver.nonlinear
+$PY -m solver.ac
 $PY -m solver.spice_export
 
 hr "7/7  ngspice validation (skips cleanly if ngspice isn't installed)"
 $PY -m solver.ngspice_validation || echo "(ngspice not installed — validation skipped; install it to run this step)"
 
 hr "Done"
-echo "Figures written: rc_charging.png, rlc_ringing.png, rectifier.png, noise_robustness.png, extractor_ablation.png, difficulty_curve.png"
+echo "Figures: rc_charging.png, rlc_ringing.png, rectifier.png, bode_lowpass.png, bode_bandpass.png, noise_robustness.png, extractor_ablation.png, difficulty_curve.png"

@@ -89,10 +89,15 @@ roadmap. These levers add *genuine* depth beyond that, ranked by hardness-per-im
    smoothing capacitor** simulates end-to-end (output 4.28 V, sub-volt ripple; `rectifier.png`).
    That one demo exercises all three solvers at once. **Still open:** inductors (need an 'L'
    kind); trapezoidal integration (`method` hook ready); a *live* animated curve for the demo.
-3. **Noise-robustness study (rigor + Phase-2 prep).** Systematically corrupt synthetic
-   images (blur, wobble/elastic distortion, lighting gradients, stroke thinning) and publish
-   the accuracy-vs-corruption-severity curve. Predicts what real photos will break, in
-   advance, with numbers.
+3. **Noise-robustness study (rigor + Phase-2 prep).** ✅ **Built** (`metrics/noise_robustness.py`).
+   Corrupts synthetic images (Gaussian blur, Gaussian noise, salt-pepper speckle) at rising
+   severity and publishes the accuracy-vs-severity curve (`noise_robustness.png`). Findings (80
+   circuits/level): blur tolerated (floors ~72%), noise has a cliff past σ≈45 (100%→20%), and
+   **speckle is the weak point — even 0.4% halves accuracy**. Phase-2 to-do it directly implies:
+   despeckle/denoise preprocessing + adaptive (local) thresholding instead of global Otsu. Per-
+   extraction timeout added (heavy corruption explodes the skeleton graph). 7 tests. **Still
+   open from the original idea:** elastic/wobble distortion and lighting-gradient curves (the
+   global-Otsu lighting cliff is noted but not yet a clean published curve).
 4. **The human moat (unchanged, still #1 overall):** ~35 own drawings + domain-adaptation
    delta, whiteboard-level command of MNA, the mini-paper with ablations + error taxonomy,
    a competition entry.

@@ -11,6 +11,7 @@ synth_out/
 debug_out/
 rc_charging.png
 rectifier.png
+noise_robustness.png
 
 # Phase 1: raw dataset, prepped YOLO dataset, training runs, model weights
 # (large/binary — keep them out of git; see training/COLAB_INSTRUCTIONS.md)

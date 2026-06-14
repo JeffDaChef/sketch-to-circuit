@@ -699,6 +699,44 @@ The non-diode lines stay in the same `name n+ n- value` shape as `to_spice`, so 
 output is still valid for our own parser too. `python -m solver.spice_export` prints an exported
 LED circuit so the format is visible.
 
+## File 14 — `metrics/noise_robustness.py` — predicting what real photos will break
+
+On the clean images we control, extraction scores 100%. Real photographs won't be clean. We
+can't test on real photos yet (that needs the trained detector), but we *can* forecast the
+damage with numbers: deliberately corrupt the synthetic images at rising severity and watch the
+accuracy fall. The output is an **accuracy-vs-severity curve** per corruption — an honest,
+quantitative map of the pipeline's weak spots, and exactly the "limitations, measured" material
+a writeup wants.
+
+Three corruptions, each a stand-in for a real photo defect: **Gaussian blur** (out of focus),
+**Gaussian noise** (sensor grain / bad light), **speckle** (dust, pen spatter, JPEG specks).
+Each keeps the ground-truth component boxes valid, so only the wire tracing is under test. The
+sweep is *seeded and nested* — a higher severity reuses the same random field as a lower one, so
+it's a fair comparison (more severity = strictly more corruption), reproducible run-to-run.
+
+What the numbers say (80 circuits/level, seed 0):
+
+| corruption | behaviour | reading |
+|---|---|---|
+| Gaussian blur (σ 0→5 px) | 100% → **72.5%**, then flat | tolerated best; thick blur erases the thinnest wires but the rest survive |
+| Gaussian noise (σ 0→75) | 100% to σ=30, **90%** at 45, then a **cliff** to ~20% | robust up to a threshold, then global thresholding collapses |
+| Speckle (0→2% of pixels) | **halves at just 0.4%**, sliding to 17.5% | the clear weak point — the skeletonizer turns every speck into graph noise |
+
+The headline finding for Phase 2: **speckle is the pipeline's Achilles' heel** — denoising/
+despeckling will be a required preprocessing step before real photos, and the noise cliff argues
+for *adaptive* (local) thresholding instead of the current global Otsu. `python -m
+metrics.noise_robustness` reproduces the table and saves the curve to `noise_robustness.png`.
+
+Two honesty notes baked into the code, because they're the kind of thing that's easy to overclaim:
+(1) the nested sweep makes the *corruption* monotonic, not the *accuracy curve* — the extractor
+isn't monotonic in its input, so curves trend down but can wiggle at small sample sizes;
+(2) a secondary "accuracy by component count under noise" cut is included but stays roughly flat
+(88–94%) across our 3–5 component range, so it's reported as *exploratory* — a real difficulty
+curve would need a wider size range. One more practical find surfaced while building this: heavy
+corruption blows the skeleton graph up to thousands of nodes and makes a single extraction
+pathologically slow, so each extraction now runs under a timeout — an image we can't process in a
+few seconds counts as a failure, which is itself a legitimate result.
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
@@ -711,6 +749,8 @@ runs Newton-Raphson inside each time step and accepts time-varying sources, so a
 rectifier with a smoothing capacitor simulates end-to-end. The solver core is now a genuine
 little numerical engine — DC, transient, and non-linear, all built on one validated linear
 solve — and circuits can now be **exported to a runnable SPICE `.cir`** that ngspice/LTspice/
-KiCad open directly. 156 tests pass, 1 skipped (the live ngspice run, waiting on the install).
-The remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
-photographs (which need the trained detector from Phase 1, i.e. the dataset).
+KiCad open directly. On the measurement side, a **noise-robustness study** now forecasts which
+real-photo defects will break extraction (speckle is the weak point). 163 tests pass, 1 skipped
+(the live ngspice run, waiting on the install). The remaining Phase-2 work is hardening the
+extraction heuristics once we're feeding *real* photographs (which need the trained detector from
+Phase 1, i.e. the dataset) — and the noise study already says where to start.

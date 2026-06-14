@@ -120,15 +120,18 @@ project" from "this person does real work." Layer them on once the spine works:
   *broken down by circuit complexity* (2 components vs 5 vs 8, with/without junctions). "It's
   98% on simple circuits and degrades to 70% past 6 components" is a real analysis a judge can
   probe, and it's honest.
-- **Ablation study.** Show a number *with and without* a design choice — e.g. accuracy with the
-  drafter split vs a naive random split (demonstrates the leakage you avoided), or with vs
-  without a preprocessing step. Ablations are the single most "I did science" signal there is.
+- **Ablation study.** Show a number *with and without* a design choice. ✅ **First one done:**
+  the extractor ablation (`metrics/extractor_ablation.py`) — blob-proximity vs skeleton-graph,
+  40% → 100% overall. More to come (e.g. drafter split vs naive random split once training runs,
+  with/without a preprocessing step). Ablations are the single most "I did science" signal there is.
 - **Formal error taxonomy.** Turn the honest-limitations section into a labelled table: each
   failure mode (crossing wires, misread junction, terminal-match miss), how often it happens,
   and a worked example image. This is the credibility centerpiece of the writeup.
-- **Baseline comparison.** Compare your from-scratch result against something off-the-shelf
-  (e.g. a generic detector with no class remap, or the published CGHD mAP) to show your method
-  adds value, not just that it exists.
+- **Baseline comparison.** ✅ **Done for wire extraction** (`metrics/extractor_ablation.py`): the
+  skeleton-graph redesign vs the frozen blob-proximity baseline on identical circuits — overall
+  **40% → 100%**, rescuing three layouts the baseline scored 0% on with no regression on the two
+  it handled. (Still to do once the detector exists: compare the from-scratch detector against
+  off-the-shelf / published CGHD mAP.)
 - **Hosted / shareable demo.** A tiny web page or recorded pipeline that a stranger can try or
   watch end-to-end — shows you can *ship*, not just prototype. (Low priority vs the above.)
 - **Reproducibility.** Seeds fixed, `requirements.txt` pinned, a one-command "regenerate all my

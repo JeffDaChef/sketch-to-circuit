@@ -737,6 +737,36 @@ corruption blows the skeleton graph up to thousands of nodes and makes a single 
 pathologically slow, so each extraction now runs under a timeout — an image we can't process in a
 few seconds counts as a failure, which is itself a legitimate result.
 
+## File 15 — `metrics/extractor_ablation.py` — proving the redesign with a number
+
+The wire extractor was rebuilt once: the first version matched component terminals to nearby
+wire *blobs* by proximity, which quietly memorised the two layouts it was tuned on; the rewrite
+builds a real graph of the wires and matches terminals to the cut endpoints that erasure creates,
+with no layout assumptions. "We rewrote it and it's better" is a claim. An **ablation** turns it
+into a number: run *both* extractors — the old one is frozen verbatim in
+`wire_extraction_baseline.py` — on the exact same circuits and report the before/after.
+
+The result (30 seeds × 5 layouts, same images fed to both):
+
+| layout | baseline (blob-proximity) | skeleton-graph (redesign) |
+|---|---|---|
+| series_divider | 100% | 100% |
+| parallel_bank | 100% | 100% |
+| series_loop | **0%** | 100% |
+| corner_chain | **0%** | 100% |
+| mirrored_loop | **0%** | 100% |
+| **overall** | **40%** (60/150) | **100%** (150/150) |
+
+That's the whole point of an ablation in one table: the redesign lifts overall extraction from
+**40% to 100%**, rescuing three layouts the old one couldn't touch (0% → 100%) *without
+regressing* the two it already handled. It's honest evidence a design choice paid off, not just
+that it exists — the single most "I did real engineering" artifact in the project so far.
+`python -m metrics.extractor_ablation` reproduces the table and saves the bar chart.
+
+Supporting this, the alternative layouts (`corner_chain`, `mirrored_loop`) and the shared
+renderer moved out of the generalization test into `data_collection/extra_layouts.py`, so they're
+reusable by both the test and this ablation rather than locked inside a test file.
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
@@ -750,7 +780,9 @@ rectifier with a smoothing capacitor simulates end-to-end. The solver core is no
 little numerical engine — DC, transient, and non-linear, all built on one validated linear
 solve — and circuits can now be **exported to a runnable SPICE `.cir`** that ngspice/LTspice/
 KiCad open directly. On the measurement side, a **noise-robustness study** now forecasts which
-real-photo defects will break extraction (speckle is the weak point). 163 tests pass, 1 skipped
-(the live ngspice run, waiting on the install). The remaining Phase-2 work is hardening the
-extraction heuristics once we're feeding *real* photographs (which need the trained detector from
-Phase 1, i.e. the dataset) — and the noise study already says where to start.
+real-photo defects will break extraction (speckle is the weak point), and an **extractor
+ablation** proves the skeleton-graph redesign lifted extraction from 40% to 100% over the old
+blob-proximity version. 166 tests pass, 1 skipped (the live ngspice run, waiting on the install).
+The remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
+photographs (which need the trained detector from Phase 1, i.e. the dataset) — and the noise
+study already says where to start.

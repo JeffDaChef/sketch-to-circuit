@@ -57,8 +57,10 @@ for once the core is solid.
   H(f) → Bode plots. Verified against closed-form filters: RC low-pass hits −3 dB / −45° at its
   cutoff with −20 dB/decade rolloff; series-RLC band-pass peaks at f₀=1/(2π√LC). 8 analytic-anchor
   tests; `python -m solver.ac` saves `bode_lowpass.png` + `bode_bandpass.png`. Makes the solver a
-  four-mode engine (DC + transient + non-linear + AC). Follow-up: small-signal AC of diode
-  circuits (linearise around the DC operating point).
+  four-mode engine (DC + transient + non-linear + AC). ✅ **Small-signal AC also built:** linearises
+  each diode at its DC operating point (r_d = n·V_t/I_D, the "26 mV/I" rule), so a diode is a
+  bias-tunable resistor — demo builds a diode+C low-pass whose cutoff tracks the bias current 10:1
+  (`bode_diode_tunable.png`). Remaining refinement: diode junction capacitance.
 - **Critique that computes consequences.** The planned LLM "explain/critique" mode should go
   past "LED with no resistor" to the actual number: "this LED sees ~45 mA vs its 20 mA rating
   → it burns out; add ~220 Ω." Genuinely useful homework tool = a better essay story than

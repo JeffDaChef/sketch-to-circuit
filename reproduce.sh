@@ -51,4 +51,4 @@ hr "7/7  ngspice validation (skips cleanly if ngspice isn't installed)"
 $PY -m solver.ngspice_validation || echo "(ngspice not installed — validation skipped; install it to run this step)"
 
 hr "Done"
-echo "Figures: rc_charging.png, rlc_ringing.png, rectifier.png, bode_lowpass.png, bode_bandpass.png, noise_robustness.png, extractor_ablation.png, difficulty_curve.png"
+echo "Figures: rc_charging.png, rlc_ringing.png, rectifier.png, bode_lowpass.png, bode_bandpass.png, bode_diode_tunable.png, noise_robustness.png, extractor_ablation.png, difficulty_curve.png"

@@ -75,11 +75,15 @@ The synthetic-only pipeline came together fast because it was *designed* to be t
 (clean images we control). The hard part — real hand-drawn photos — is already on the
 roadmap. These levers add *genuine* depth beyond that, ranked by hardness-per-impressiveness:
 
-1. **Lift the no-crossing-wires constraint (research-grade).** v1 bans crossings because
-   handling them is near-research-level. Shipping v1 constrained, then REMOVING the
-   constraint in v2 — detect crossovers (CGHD has a `crossover` class) and thread the
-   skeleton graph through them — upgrades the story from "I constrained the problem" to
-   "…and then I lifted the constraint."
+1. **Lift the no-crossing-wires constraint (research-grade).** ✅ **Built**
+   (`vision/wire_extraction.py: thread_crossovers`). A plain '+' crossing fuses two wires into a
+   degree-4 skeleton node; given a `crossover` box (detector stand-in; CGHD has the class) we
+   split it, pairing the two most-opposite edges as each straight wire, so the nets stay
+   distinct. Before/after proof: on a divider where the n1 rail crosses the n2 wire, *with* the
+   box it extracts correctly, *without* it R1 comes out shorted. Hop-drawn crossovers (wires
+   already apart in the skeleton) are left alone — graceful. 10 tests (unit + end-to-end +
+   jitter). Story upgraded from "I constrained the problem" to "…and then I lifted the
+   constraint." (Still open: have the *trained detector* emit crossover boxes on real photos.)
 2. **Transient simulation + true nonlinear diodes (deep math).** ✅ **Both built.** Time-domain
    solving (`solver/transient.py`, backward-Euler companion models) AND Newton-Raphson on the
    exponential Shockley diode equation (`solver/nonlinear.py`) instead of the planned fixed-2V

@@ -137,10 +137,17 @@ def _to_ink_mask(image: np.ndarray) -> np.ndarray:
 
 def _erase_components(ink: np.ndarray, components: list[dict],
                       margin: int) -> np.ndarray:
-    """Zero out every component's margin-expanded bounding box."""
+    """Zero out every component's margin-expanded bounding box.
+
+    A "crossover" is NOT erased: it isn't a component but a wire feature (two
+    wires crossing without connecting), and we want its crossing pixels to stay so
+    the skeleton graph forms the node we later thread through.
+    """
     erased = ink.copy()
     h, w = erased.shape
     for comp in components:
+        if comp["kind"] == "crossover":
+            continue
         xmin, ymin, xmax, ymax = comp["bbox"]
         r0, r1 = max(0, int(ymin) - margin), min(h, int(ymax) + margin)
         c0, c1 = max(0, int(xmin) - margin), min(w, int(xmax) + margin)
@@ -159,6 +166,8 @@ def _region_map(shape: tuple[int, int], components: list[dict],
     h, w = shape
     mask = np.zeros((h, w), dtype=bool)
     for comp in components:
+        if comp["kind"] == "crossover":
+            continue                      # not a component; see _erase_components
         xmin, ymin, xmax, ymax = comp["bbox"]
         r0, r1 = max(0, int(ymin) - margin), min(h, int(ymax) + margin)
         c0, c1 = max(0, int(xmin) - margin), min(w, int(xmax) + margin)
@@ -232,6 +241,73 @@ def _in_face_band(ep: tuple[float, float], bbox: list[float],
 
 
 # ---------------------------------------------------------------------------
+# Crossover threading (lifting the no-crossing-wires constraint)
+# ---------------------------------------------------------------------------
+
+def _point_in_bbox(pos: tuple[float, float], bbox: list[float], pad: float = 0.0) -> bool:
+    x, y = pos
+    return (bbox[0] - pad) <= x <= (bbox[2] + pad) and (bbox[1] - pad) <= y <= (bbox[3] + pad)
+
+
+def _thread_one(graph: nx.MultiGraph, node: int) -> bool:
+    """Split one degree-4 crossing node into two collinear pass-throughs.
+
+    Two wires crossing (a plain '+') skeletonise to a single branch node of
+    degree 4, which wrongly fuses the two wires into one electrical net. We undo
+    that: pair the four incident edges by direction — each wire continues roughly
+    straight, so the two most *opposite* edges belong to the same wire — and
+    rebuild the node as two separate nodes, one per wire. The crossing is then a
+    pass-over, not a connection.
+    """
+    inc = list(graph.edges(node, keys=True, data=True))    # (node, other, key, data)
+    if len(inc) != 4 or any(v == node for _, v, _, _ in inc):
+        return False                                       # not a clean 4-way / has a self-loop
+    npos = graph.nodes[node]["pos"]
+
+    def direction(other: int) -> tuple[float, float]:
+        op = graph.nodes[other]["pos"]
+        dx, dy = op[0] - npos[0], op[1] - npos[1]
+        n = math.hypot(dx, dy) or 1.0
+        return dx / n, dy / n
+
+    dirs = [direction(e[1]) for e in inc]
+    # Pair edge 0 with whichever of the others points most nearly opposite to it
+    # (smallest, i.e. most negative, dot product); the remaining two are the pair.
+    rest = [1, 2, 3]
+    j = min(rest, key=lambda k: dirs[0][0] * dirs[k][0] + dirs[0][1] * dirs[k][1])
+    rest.remove(j)
+    pairs = ((inc[0], inc[j]), (inc[rest[0]], inc[rest[1]]))
+
+    base = max(graph.nodes) + 1
+    graph.remove_node(node)                                # drops the 4 fused edges
+    for offset, (e1, e2) in enumerate(pairs):
+        new = base + offset
+        graph.add_node(new, kind="branch", pos=npos)
+        for _, v, _, data in (e1, e2):
+            graph.add_edge(new, v, length=data.get("length", 0), pixels=data.get("pixels", []))
+    return True
+
+
+def thread_crossovers(graph: nx.MultiGraph, crossovers: list[dict]) -> int:
+    """Thread every detected crossover in `graph`; return how many were split.
+
+    `crossovers` are component-style dicts with kind "crossover" and a bbox. For
+    each, any degree-4 branch node sitting inside the box is split. Anything that
+    isn't a clean 4-way (e.g. a 'hop'-drawn crossover whose wires never touched,
+    so the skeleton already keeps them apart) is left alone — graceful by design.
+    """
+    threaded = 0
+    for cx in crossovers:
+        bbox = cx["bbox"]
+        targets = [n for n, d in graph.nodes(data=True)
+                   if d["kind"] == "branch" and _point_in_bbox(d["pos"], bbox)]
+        for node in targets:
+            if graph.has_node(node) and _thread_one(graph, node):
+                threaded += 1
+    return threaded
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -289,6 +365,11 @@ def extract_netlist(
     skel = skeletonize(wire_only)
     graph = build_skeleton_graph(skel, prune_len=4)
     regions = _region_map((h, w), components, _MARGIN)
+
+    # Lift the no-crossing-wires constraint: where the detector marked a crossover,
+    # split the fused degree-4 node so the two wires stay separate nets. Done
+    # BEFORE connected-components, which is what turns the graph into nets.
+    thread_crossovers(graph, [c for c in components if c["kind"] == "crossover"])
 
     # Each connected piece of the skeleton graph is one candidate net.
     net_of_node: dict[int, int] = {}

@@ -11,6 +11,7 @@ synth_out/
 debug_out/
 rc_charging.png
 rectifier.png
+rlc_ringing.png
 noise_robustness.png
 extractor_ablation.png
 

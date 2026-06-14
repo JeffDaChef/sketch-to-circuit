@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from solver.mna import solve
 from solver.netlist import Netlist
@@ -70,6 +70,7 @@ class TransientResult:
     times: list[float]                                  # seconds, length = #samples
     node_voltages: dict[str, list[float]]               # node name -> voltage at each time
     capacitor_voltages: dict[str, list[float]]          # cap name -> voltage across it
+    inductor_currents: dict[str, list[float]] = field(default_factory=dict)  # ind name -> current
 
     def series(self, node: str) -> list[float]:
         """The full voltage-vs-time series for one node."""
@@ -97,46 +98,81 @@ def sine(amplitude: float, freq_hz: float, offset: float = 0.0, phase: float = 0
 
 # --- building the per-step circuits (the companion-model machinery) ----------
 
+_METHODS = ("backward-euler", "trapezoidal")
+
+
 def _with_sources(nl: Netlist, c, overrides: dict[str, float]) -> None:
     """Add component `c` to `nl`, swapping in a time-varying value if overridden."""
     value = overrides[c.name] if (c.kind in ("V", "I") and c.name in overrides) else c.value
     nl.add(c.kind, c.name, value, c.nodes[0], c.nodes[1])
 
 
-def _ic_netlist(netlist: Netlist, initial: dict[str, float], overrides: dict[str, float]) -> Netlist:
-    """The t=0 circuit: each capacitor pinned to its initial voltage (a source).
+def _companion(kind: str, value: float, v_prev: float, i_prev: float,
+               dt: float, method: str) -> tuple[float, float]:
+    """Return (conductance g, current-source value) for one reactive element's step.
 
-    An uncharged capacitor (0 V) becomes a 0 V source — i.e. a short — which is
-    exactly how a fresh capacitor behaves the instant the circuit switches on.
+    Both a capacitor and an inductor become a conductance in parallel with a
+    current source; the element's branch current is then i = g·v_new + i_src. The
+    formulas come straight from the integration rule applied to i=C·dv/dt (cap) or
+    v=L·di/dt (ind):
+
+      backward-Euler   cap: g = C/h,    i_src = −(C/h)·v_prev
+                       ind: g = h/L,    i_src = +i_prev
+      trapezoidal      cap: g = 2C/h,   i_src = −(2C/h)·v_prev − i_prev
+                       ind: g = h/(2L), i_src = +i_prev + g·v_prev
+
+    `v_prev`/`i_prev` are the element's voltage/current at the previous step. (The
+    trapezoidal forms also need the *other* quantity, which is why the caller seeds
+    both and runs the first step in backward-Euler.)
+    """
+    if kind == "C":
+        g = value / dt if method == "backward-euler" else 2.0 * value / dt
+        i_src = -g * v_prev - (0.0 if method == "backward-euler" else i_prev)
+    else:  # inductor
+        g = dt / value if method == "backward-euler" else dt / (2.0 * value)
+        i_src = i_prev + (0.0 if method == "backward-euler" else g * v_prev)
+    return g, i_src
+
+
+def _ic_netlist(netlist: Netlist, cap_v0: dict[str, float], ind_i0: dict[str, float],
+                overrides: dict[str, float]) -> Netlist:
+    """The t=0 circuit: each capacitor pinned to its initial voltage, each inductor
+    to its initial current.
+
+    An uncharged capacitor (0 V) becomes a 0 V source — a short — and a
+    current-free inductor (0 A) becomes a 0 A source — an open — which is exactly
+    how fresh reactive parts behave the instant the circuit switches on.
     """
     nl = Netlist()
     for c in netlist.components:
         if c.kind == "C":
-            nl.add("V", f"{c.name}__Vic", initial.get(c.name, 0.0), c.nodes[0], c.nodes[1])
+            nl.add("V", f"{c.name}__Vic", cap_v0.get(c.name, 0.0), c.nodes[0], c.nodes[1])
+        elif c.kind == "L":
+            nl.add("I", f"{c.name}__Iic", ind_i0.get(c.name, 0.0), c.nodes[0], c.nodes[1])
         else:
             _with_sources(nl, c, overrides)
     return nl
 
 
-def _companion_netlist(netlist: Netlist, cap_v: dict[str, float], dt: float,
-                       overrides: dict[str, float]) -> Netlist:
-    """One backward-Euler step's circuit: each capacitor → resistor ∥ current source.
+def _step_netlist(netlist: Netlist, v_prev: dict[str, float], i_prev: dict[str, float],
+                  dt: float, method: str, overrides: dict[str, float]):
+    """Build one step's R/V/I(/D) circuit and the companion bookkeeping.
 
-    R_comp = dt/C (conductance C/dt); the parallel current source carries
-    −(C/dt)·v_prev so the pair reproduces i = (C/dt)(v_new − v_prev). v_prev is
-    the capacitor's voltage from the previous step (cap.nodes[0] − cap.nodes[1]).
-    Non-capacitor parts (including diodes) pass through for the step's solver.
+    Returns (netlist, companions) where companions is a list of
+    (name, g, i_src, node_a, node_b) used afterwards to recover each reactive
+    element's new voltage and current from the solved node voltages.
     """
     nl = Netlist()
+    companions = []
     for c in netlist.components:
-        if c.kind == "C":
-            r_comp = dt / c.value                       # resistance h/C
-            i_comp = -(c.value / dt) * cap_v[c.name]     # current source value, sign per netlist.py
-            nl.add("R", f"{c.name}__Rc", r_comp, c.nodes[0], c.nodes[1])
-            nl.add("I", f"{c.name}__Ic", i_comp, c.nodes[0], c.nodes[1])
+        if c.kind in ("C", "L"):
+            g, i_src = _companion(c.kind, c.value, v_prev[c.name], i_prev[c.name], dt, method)
+            nl.add("R", f"{c.name}__R", 1.0 / g, c.nodes[0], c.nodes[1])
+            nl.add("I", f"{c.name}__I", i_src, c.nodes[0], c.nodes[1])
+            companions.append((c.name, g, i_src, c.nodes[0], c.nodes[1]))
         else:
             _with_sources(nl, c, overrides)
-    return nl
+    return nl, companions
 
 
 # --- the time-stepping loop --------------------------------------------------
@@ -147,31 +183,41 @@ def solve_transient(
     dt: float,
     *,
     initial_conditions: dict[str, float] | None = None,
+    initial_currents: dict[str, float] | None = None,
     sources: dict[str, Callable[[float], float]] | None = None,
     models: dict[str, DiodeModel] | None = None,
     method: str = "backward-euler",
 ) -> TransientResult:
     """March the circuit through time from 0 to `t_stop` in steps of `dt`.
 
-    `initial_conditions` maps a capacitor name to its starting voltage (default
+    `initial_conditions` maps a capacitor name to its starting voltage and
+    `initial_currents` maps an inductor name to its starting current (both default
     0). `sources` maps a V/I source name to a function of time (e.g. `sine(...)`);
     unlisted sources stay at their DC value. `models` maps a diode name to its
     DiodeModel (only relevant when the circuit contains diodes, which trigger a
-    Newton-Raphson solve at each step). Returns a TransientResult with the voltage
-    curve for every node and capacitor. `method` is fixed to backward-Euler for
-    now; the hook is here so trapezoidal can slot in later.
+    Newton-Raphson solve at each step). `method` is "backward-euler" (default,
+    rock-solid stable) or "trapezoidal" (2nd-order accurate; the first step always
+    runs in backward-Euler to start it consistently). Returns a TransientResult
+    with the voltage curve per node/capacitor and the current per inductor.
     """
-    if method != "backward-euler":
-        raise TransientError(f"only 'backward-euler' is implemented, not {method!r}")
+    if method not in _METHODS:
+        raise TransientError(f"method must be one of {_METHODS}, not {method!r}")
     if dt <= 0 or t_stop <= 0 or dt > t_stop:
         raise TransientError("need 0 < dt <= t_stop")
-    initial = dict(initial_conditions or {})
+    cap_ic = dict(initial_conditions or {})
+    ind_ic = dict(initial_currents or {})
     sources = dict(sources or {})
     caps = [c for c in netlist.components if c.kind == "C"]
+    inds = [c for c in netlist.components if c.kind == "L"]
+    reactive = caps + inds
     cap_names = {c.name for c in caps}
-    for name in initial:
+    ind_names = {c.name for c in inds}
+    for name in cap_ic:
         if name not in cap_names:
             raise TransientError(f"initial condition for unknown capacitor {name!r}")
+    for name in ind_ic:
+        if name not in ind_names:
+            raise TransientError(f"initial current for unknown inductor {name!r}")
     source_names = {c.name for c in netlist.components if c.kind in ("V", "I")}
     for name in sources:
         if name not in source_names:
@@ -185,31 +231,45 @@ def solve_transient(
     def overrides(t: float) -> dict[str, float]:
         return {name: fn(t) for name, fn in sources.items()}
 
-    # t = 0 snapshot: solve with caps pinned to their initial voltages.
-    ic = step_solve(_ic_netlist(netlist, initial, overrides(0.0)))
-    cap_v = {c.name: initial.get(c.name, 0.0) for c in caps}
+    # Per-element state: voltage across it and current through it. We track BOTH for
+    # every reactive element (trapezoidal needs both); the unused one is seeded to 0
+    # and corrected after the first (backward-Euler) step.
+    v_prev = {c.name: (cap_ic.get(c.name, 0.0) if c.kind == "C" else 0.0) for c in reactive}
+    i_prev = {c.name: (ind_ic.get(c.name, 0.0) if c.kind == "L" else 0.0) for c in reactive}
+
+    # t = 0 snapshot: solve with caps pinned to their initial voltages and inductors
+    # to their initial currents.
+    ic = step_solve(_ic_netlist(netlist, cap_ic, ind_ic, overrides(0.0)))
 
     times = [0.0]
     node_voltages: dict[str, list[float]] = {n: [v] for n, v in ic.node_voltages.items()}
-    capacitor_voltages: dict[str, list[float]] = {c.name: [cap_v[c.name]] for c in caps}
+    capacitor_voltages: dict[str, list[float]] = {c.name: [v_prev[c.name]] for c in caps}
+    inductor_currents: dict[str, list[float]] = {c.name: [i_prev[c.name]] for c in inds}
 
     # Step forward. round() guards against floating-point drift in the step count.
     n_steps = int(round(t_stop / dt))
     t = 0.0
-    for _ in range(n_steps):
+    for step_idx in range(n_steps):
         t += dt
-        step = step_solve(_companion_netlist(netlist, cap_v, dt, overrides(t)))
-        # Update each capacitor's remembered voltage from the new node voltages,
-        # then record the whole snapshot.
-        for c in caps:
-            cap_v[c.name] = step.node_voltages[c.nodes[0]] - step.node_voltages[c.nodes[1]]
+        # The very first step runs backward-Euler regardless: trapezoidal needs a
+        # consistent previous current/voltage, which we only have after one step.
+        method_used = "backward-euler" if step_idx == 0 else method
+        nl, companions = _step_netlist(netlist, v_prev, i_prev, dt, method_used, overrides(t))
+        sol = step_solve(nl)
+        # Recover each reactive element's new voltage and current, then record.
+        for name, g, i_src, a, b in companions:
+            v_new = sol.node_voltages[a] - sol.node_voltages[b]
+            v_prev[name] = v_new
+            i_prev[name] = g * v_new + i_src
         times.append(t)
         for n in node_voltages:
-            node_voltages[n].append(step.node_voltages[n])
+            node_voltages[n].append(sol.node_voltages[n])
         for c in caps:
-            capacitor_voltages[c.name].append(cap_v[c.name])
+            capacitor_voltages[c.name].append(v_prev[c.name])
+        for c in inds:
+            inductor_currents[c.name].append(i_prev[c.name])
 
-    return TransientResult(times, node_voltages, capacitor_voltages)
+    return TransientResult(times, node_voltages, capacitor_voltages, inductor_currents)
 
 
 # --- a plotting helper + demos -----------------------------------------------
@@ -270,8 +330,48 @@ def _rectifier_demo() -> None:
     print("  saved rectifier.png")
 
 
+def _rlc_demo() -> None:
+    """Series RLC step response — an underdamped circuit that *rings*.
+
+    A 5 V step drives R-L-C in series; the capacitor voltage overshoots well past
+    5 V, then oscillates and decays back to 5 V — the classic damped sinusoid you
+    can only get once the solver has both inductors and capacitors. We plot
+    backward-Euler against trapezoidal: backward-Euler artificially damps the
+    ringing (numerical loss), trapezoidal preserves it — a visible reason the
+    integration rule matters.
+    """
+    def build():
+        n = Netlist()
+        n.add("V", "V1", "5", "in", "0")
+        n.add("R", "R1", "200", "in", "a")
+        n.add("L", "L1", 1.0, "a", "b")
+        n.add("C", "C1", 1e-6, "b", "0")                # ω₀=1/√(LC)=1000 rad/s, underdamped (R<2√(L/C))
+        return n
+
+    be = solve_transient(build(), t_stop=0.05, dt=2e-5, method="backward-euler")
+    tr = solve_transient(build(), t_stop=0.05, dt=2e-5, method="trapezoidal")
+    print("\nSeries RLC step (underdamped, ω₀≈1000 rad/s):")
+    print(f"  overshoot peak V(C): backward-Euler {max(be.series('b')):.2f} V, "
+          f"trapezoidal {max(tr.series('b')):.2f} V  (ideal ~8.6 V; BE over-damps)")
+    print(f"  settles to: {tr.series('b')[-1]:.2f} V (expect 5 V)")
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(tr.times, tr.series("b"), label="trapezoidal")
+    ax.plot(be.times, be.series("b"), label="backward-Euler", linestyle="--")
+    ax.axhline(5.0, color="grey", linewidth=0.8, alpha=0.6)
+    ax.set_xlabel("time (s)"); ax.set_ylabel("capacitor voltage (V)")
+    ax.set_title("Series RLC ringing — trapezoidal vs backward-Euler")
+    ax.legend(); ax.grid(True, alpha=0.3)
+    fig.tight_layout(); fig.savefig("rlc_ringing.png", dpi=110); plt.close(fig)
+    print("  saved rlc_ringing.png")
+
+
 def _demo() -> int:
     _rc_demo()
+    _rlc_demo()
     _rectifier_demo()
     return 0
 

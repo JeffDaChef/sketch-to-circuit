@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 KINDS = {
     "R": "resistor",
     "C": "capacitor",
+    "L": "inductor",
     "V": "voltage source",
     "I": "current source",
     "D": "diode/LED",

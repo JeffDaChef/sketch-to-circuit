@@ -64,7 +64,7 @@ def main() -> None:
         "--model",
         type=str,
         default="yolo11n.pt",
-        help="Starting checkpoint. Default is yolo11n.pt (YOLO11-nano pretrained on ImageNet).",
+        help="Starting checkpoint. Default is yolo11n.pt (YOLO11-nano pretrained on COCO).",
     )
 
     # One epoch = one full pass through the training images. 100 is a good
@@ -101,8 +101,9 @@ def main() -> None:
     parser.add_argument(
         "--project",
         type=str,
-        default="runs",
-        help="Parent folder for all training outputs. Default 'runs'.",
+        default="runs/detect",
+        help="Parent folder for all training outputs. Default 'runs/detect' "
+             "(matches the bare `yolo detect train` layout and COLAB_INSTRUCTIONS.md).",
     )
     parser.add_argument(
         "--name",
@@ -129,7 +130,7 @@ def main() -> None:
         print("Did you run cghd_prep.py first?  python data_collection/cghd_prep.py --src <CGHD_folder> --out cghd_yolo")
         sys.exit(1)
 
-    # Load the starting weights. 'yolo11n.pt' was pretrained on ImageNet, so the
+    # Load the starting weights. 'yolo11n.pt' was pretrained on COCO, so the
     # network already knows basic visual features (edges, textures, shapes).
     # Fine-tuning from this checkpoint is MUCH faster than training from scratch.
     print(f"\n[INFO] Loading model: {args.model}")
@@ -151,6 +152,7 @@ def main() -> None:
         name=args.name,
         patience=args.patience,
         plots=True,
+        seed=0,            # reproducible training run (the drafter split is seeded too)
     )
 
     # Tell the user exactly where to find the trained weights file.

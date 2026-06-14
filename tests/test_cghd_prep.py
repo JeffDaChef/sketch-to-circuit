@@ -137,6 +137,14 @@ class TestParseVoc:
 
         assert objs == []
 
+    def test_zero_image_size_raises_clearly(self, tmp_path: Path):
+        # A zero/negative <size> would silently divide-by-zero in normalisation;
+        # parse_voc must reject it with a clear error, not pass it downstream.
+        xml_path = tmp_path / "zerosize.xml"
+        xml_path.write_text(_make_voc_xml(0, 0, [("resistor", 1, 1, 2, 2)]))
+        with pytest.raises(ValueError, match="non-positive image size"):
+            parse_voc(xml_path)
+
 
 # ---------------------------------------------------------------------------
 # Tests for remap_objects
@@ -285,6 +293,18 @@ class TestToYoloLines:
         parts = lines[0].split()
         for val in parts[1:]:
             assert 0.0 <= float(val) <= 1.0, f"Out-of-range value: {val}"
+
+    def test_overflowing_box_stays_geometrically_consistent(self):
+        # The clamp must keep centre+size reconstructing the (clamped) corners.
+        # Box -20..80 px on a 100-px image -> clamped corners 0.0..0.8, so
+        # cx=0.4, w=0.8 (NOT cx=0.3 from the raw centre with w clamped). Clamping
+        # cx/cy/w/h independently would give an inconsistent box here.
+        mapped = [(0, -20, -20, 80, 80)]
+        _, cx, cy, w, h = to_yolo_lines(100, 100, mapped)[0].split()
+        assert float(cx) == pytest.approx(0.4) and float(w) == pytest.approx(0.8)
+        # centre - half-width == clamped left corner (0.0), centre + half == 0.8
+        assert float(cx) - float(w) / 2 == pytest.approx(0.0)
+        assert float(cx) + float(w) / 2 == pytest.approx(0.8)
 
 
 # ---------------------------------------------------------------------------

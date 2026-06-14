@@ -50,6 +50,34 @@ def test_threading_pairs_collinear_wires():
     assert [(5, 30), (54, 30)] in comps                    # horizontal wire (same y)
 
 
+def test_threads_a_skewed_crossing_too():
+    # A shallow-angle crossing skeletonises to TWO adjacent degree-3 nodes, not one
+    # degree-4 node. The cluster-based threading must still split it into 2 wires.
+    m = np.zeros((100, 100), bool)
+    for x in range(10, 90):
+        y1, y2 = 50 + int((x - 50) * 0.25), 50 - int((x - 50) * 0.25)
+        m[y1, x] = True
+        m[y2, x] = True
+    g = build_skeleton_graph(m, prune_len=0)
+    degs = sorted(d for n, d in g.degree() if g.nodes[n]["kind"] == "branch")
+    assert degs == [3, 3]                                   # the case the old code missed
+    n = thread_crossovers(g, [{"kind": "crossover", "bbox": [40, 40, 60, 60]}])
+    assert n == 1
+    assert nx.number_connected_components(g) == 2
+
+
+def test_threading_refuses_a_three_way_junction():
+    # A T-junction (3 wires that truly connect) has only 3 edges leaving the box —
+    # not a crossing. Threading must refuse it rather than fabricate a split.
+    m = np.zeros((60, 60), bool)
+    m[30, 5:55] = True       # horizontal
+    m[30:55, 30] = True      # one leg down -> a T, not a +
+    g = build_skeleton_graph(m, prune_len=0)
+    before = nx.number_connected_components(g)
+    n = thread_crossovers(g, [{"kind": "crossover", "bbox": [20, 20, 40, 40]}])
+    assert n == 0 and nx.number_connected_components(g) == before
+
+
 def test_threading_is_graceful_when_no_crossing_node():
     # A crossover box over empty space (or a hop-drawn crossover whose wires never
     # touched) has no degree-4 node: nothing is threaded, graph unchanged.

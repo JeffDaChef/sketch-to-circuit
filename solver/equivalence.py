@@ -17,6 +17,15 @@ that (a) preserves ground / non-ground nodes and (b) matches edge kinds.
 
 This is also used as the Phase-4 extraction metric: run
 ``circuit_equivalent(extracted, ground_truth)`` and count how many seeds pass.
+
+KNOWN LIMITATION — the metric is polarity-blind. The graph is *undirected* and
+edges carry only a ``kind``, so component ORIENTATION is ignored: a diode and the
+same diode reversed compare as equivalent, as do a voltage source and its flip.
+That is deliberate for v1 — the extractor matches a component's two terminals from
+box geometry and can't reliably read which way a diode points anyway — but it
+means a topologically-correct-but-reversed diode would (wrongly) score as a pass.
+Making the metric polarity-aware (a directed multigraph with oriented edge tags)
+is the right v2 upgrade once the detector can resolve component orientation.
 """
 
 from __future__ import annotations

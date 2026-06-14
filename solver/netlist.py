@@ -12,6 +12,7 @@ produces Netlist objects, the MNA solver consumes them.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -77,6 +78,15 @@ def parse_value(text: str) -> float:
                      stripped[-3:].upper() == "MEG"):
         token = stripped
 
+    # Plain Python numbers first: this covers integers, decimals, a leading sign,
+    # and scientific notation ('1e6', '-2.2e-3') — exactly what to_spice() emits
+    # with %g, so to_spice -> from_spice round-trips. (NaN/inf parse here too but
+    # are rejected later by Component, which requires finite values.)
+    try:
+        return float(token)
+    except ValueError:
+        pass
+
     m = _INFIX.match(token)
     if m:
         whole, mult, frac = m.groups()
@@ -115,6 +125,18 @@ class Component:
             raise NetlistError(f"unknown component kind {self.kind!r} for {self.name}")
         if len(self.nodes) != 2:
             raise NetlistError(f"{self.name}: components have exactly 2 nodes")
+        # A value must be a real, finite number (NaN/inf would poison the matrix).
+        if not math.isfinite(self.value):
+            raise NetlistError(f"{self.name}: value must be finite, got {self.value!r}")
+        # Passive parts (R/C/L) must be strictly positive: a zero resistance is a
+        # short (model it as a merged node) and would divide-by-zero in the solver;
+        # negatives are unphysical. Sources (V/I) and the diode placeholder may be
+        # any finite value (a -5 V rail is legitimate).
+        if self.kind in ("R", "C", "L") and self.value <= 0:
+            raise NetlistError(
+                f"{self.name}: {KINDS[self.kind]} value must be positive, got {self.value!r} "
+                "(a zero/negative R/C/L isn't physical; a 0 Ω 'resistor' is just a wire)"
+            )
 
 
 @dataclass

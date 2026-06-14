@@ -182,6 +182,26 @@ def test_nonzero_inductor_initial_current():
     assert abs(cur[-1]) < abs(cur[0])                       # decays
 
 
+def test_lands_exactly_on_t_stop_for_nondividing_dt():
+    # dt that doesn't divide t_stop must still END at t_stop (not stop short at
+    # 0.9), via a shorter final step — else final() reports the wrong time's value.
+    res = solve_transient(rc_circuit(), t_stop=1.0, dt=0.3)
+    assert res.times[-1] == pytest.approx(1.0)            # the actual fix under test
+    assert res.times[0] == 0.0
+    assert all(b >= a - 1e-12 for a, b in zip(res.times, res.times[1:]))  # increasing
+    mid = res.series("mid")
+    assert all(b >= a - 1e-9 for a, b in zip(mid, mid[1:]))               # still charging
+    assert 0.0 < mid[-1] < 5.0                            # coarse dt, but sane direction
+
+
+def test_finer_dt_lands_on_t_stop_with_correct_value():
+    # With a dividing-into-t_stop dt the path is unchanged; with a fine non-dividing
+    # dt the final value is also accurate (the partial step doesn't corrupt it).
+    res = solve_transient(rc_circuit(), t_stop=1.0, dt=0.0007)   # 1/0.0007 not integer
+    assert res.times[-1] == pytest.approx(1.0)
+    assert res.series("mid")[-1] == pytest.approx(5.0 * (1 - math.exp(-1.0)), abs=0.02)
+
+
 def test_rejects_unknown_method_and_inductor_ic():
     with pytest.raises(TransientError, match="method must be"):
         solve_transient(rc_circuit(), t_stop=1.0, dt=0.01, method="rk4")

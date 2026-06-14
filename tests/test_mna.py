@@ -121,7 +121,9 @@ def test_diode_rejected():
     n = Netlist()
     n.add("V", "V1", "5", "a", "0")
     n.add("D", "D1", "2", "a", "0")
-    with pytest.raises(SolverError):
+    # match= pins the REASON (diodes need the nonlinear solver), so the test can't
+    # pass on an unrelated SolverError.
+    with pytest.raises(SolverError, match="nonlinear|diode"):
         solve(n)
 
 

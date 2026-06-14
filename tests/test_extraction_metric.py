@@ -1,101 +1,69 @@
 """Tests for metrics/extraction_accuracy.py — the end-to-end extraction metric.
 
-HOW THIS WORKS
---------------
-We call ``evaluate_extraction(count=40, seed=0)`` and check three things:
+We call ``evaluate_extraction(count=40, seed=0)`` once (a module-scoped fixture so
+a rendering failure is a clean test failure, not a collection error) and check:
 
-1. **Correctness of the headline number**: total == 40 and accuracy >= 0.95.
-   (We expect ~1.0 currently; the margin of 0.05 guards against rare
-   platform-specific rendering differences.)
-
-2. **Internal consistency of the bookkeeping**: the sum of per-template and
-   per-component-count tallies must add up to 40 for both "correct" and "total".
-
-3. **Determinism**: calling evaluate_extraction twice with the same (count, seed)
-   must return identical dicts, proving the single-RNG design works.
+1. **The headline number** is exactly right — all 40 circuits recover correctly
+   (the pipeline is deterministic; the official figure is 200/200, so anything
+   below 100% at count=40 is a real regression, not noise).
+2. **Bookkeeping consistency** — per-template and per-count tallies reconcile.
+3. **The difficulty breakdown actually spans >1 component count** (else the
+   "by component count" curve has silently collapsed to a single bucket).
+4. **Determinism** — same (count, seed) -> identical dicts.
 """
 
 from __future__ import annotations
 
+import pytest
+
 from metrics.extraction_accuracy import evaluate_extraction
 
 
-# ---------------------------------------------------------------------------
-# Shared fixture — run once, share across tests
-# ---------------------------------------------------------------------------
-
-# We deliberately call this at module level so the 40-circuit run only happens
-# once (pytest re-uses the module), keeping test-suite time low.
-_RESULT = evaluate_extraction(count=40, seed=0)
+@pytest.fixture(scope="module")
+def result() -> dict:
+    # Module-scoped: the 40-circuit run happens once and is shared by every test.
+    return evaluate_extraction(count=40, seed=0)
 
 
-# ---------------------------------------------------------------------------
-# Headline number
-# ---------------------------------------------------------------------------
+# --- headline number ---------------------------------------------------------
 
-def test_total_is_correct() -> None:
-    """evaluate_extraction(40, 0) must process exactly 40 circuits."""
-    assert _RESULT["total"] == 40
+def test_total_is_correct(result) -> None:
+    assert result["total"] == 40
 
 
-def test_accuracy_threshold() -> None:
-    """Accuracy must be >= 95% — we expect ~100% with the current algorithm."""
-    assert _RESULT["accuracy"] >= 0.95, (
-        f"Accuracy {_RESULT['accuracy']:.1%} is below the 95% threshold.  "
-        f"Failing circuits: {_RESULT['failures']}"
-    )
+def test_accuracy_is_perfect(result) -> None:
+    # The extractor recovers every synthetic circuit; pin it exactly so a drop
+    # (e.g. 40 -> 38) fails loudly instead of hiding under a loose >=0.95 gate.
+    assert result["correct"] == 40, f"regressed; failures: {result['failures']}"
+    assert result["accuracy"] == 1.0
 
 
-def test_correct_matches_template_sum() -> None:
-    """The top-level 'correct' count must equal the sum of per-template corrects."""
-    template_correct_sum = sum(c for c, _ in _RESULT["by_template"].values())
-    assert _RESULT["correct"] == template_correct_sum, (
-        f"'correct'={_RESULT['correct']} does not match "
-        f"sum-of-template-corrects={template_correct_sum}"
-    )
+# --- bookkeeping consistency -------------------------------------------------
+
+def test_correct_matches_template_sum(result) -> None:
+    assert result["correct"] == sum(c for c, _ in result["by_template"].values())
 
 
-# ---------------------------------------------------------------------------
-# Bookkeeping consistency
-# ---------------------------------------------------------------------------
-
-def test_by_template_total_sums_to_count() -> None:
-    """Sum of all per-template 'total' values must equal 40."""
-    total_sum = sum(t for _, t in _RESULT["by_template"].values())
-    assert total_sum == 40, (
-        f"by_template totals sum to {total_sum}, expected 40"
-    )
+def test_by_template_total_sums_to_count(result) -> None:
+    assert sum(t for _, t in result["by_template"].values()) == 40
 
 
-def test_by_component_count_total_sums_to_count() -> None:
-    """Sum of all per-component-count 'total' values must equal 40."""
-    total_sum = sum(t for _, t in _RESULT["by_component_count"].values())
-    assert total_sum == 40, (
-        f"by_component_count totals sum to {total_sum}, expected 40"
-    )
+def test_by_component_count_total_sums_to_count(result) -> None:
+    assert sum(t for _, t in result["by_component_count"].values()) == 40
 
 
-def test_by_component_count_correct_sums_match() -> None:
-    """Sum of per-component-count 'correct' values must equal the headline correct."""
-    comp_correct_sum = sum(c for c, _ in _RESULT["by_component_count"].values())
-    assert _RESULT["correct"] == comp_correct_sum, (
-        f"'correct'={_RESULT['correct']} does not match "
-        f"sum-of-component-count-corrects={comp_correct_sum}"
-    )
+def test_difficulty_breakdown_spans_multiple_sizes(result) -> None:
+    # The "accuracy by component count" cut is only meaningful if it has >1 bucket.
+    assert len(result["by_component_count"]) > 1
 
 
-# ---------------------------------------------------------------------------
-# Determinism
-# ---------------------------------------------------------------------------
+# --- determinism -------------------------------------------------------------
 
-def test_determinism() -> None:
-    """Calling evaluate_extraction twice with the same args must give equal dicts."""
-    result_again = evaluate_extraction(count=40, seed=0)
-    # Compare the numeric fields directly.
-    assert result_again["total"]    == _RESULT["total"]
-    assert result_again["correct"]  == _RESULT["correct"]
-    assert result_again["accuracy"] == _RESULT["accuracy"]
-    # The breakdown dicts must also match exactly.
-    assert result_again["by_template"]        == _RESULT["by_template"]
-    assert result_again["by_component_count"] == _RESULT["by_component_count"]
-    assert result_again["failures"]           == _RESULT["failures"]
+def test_determinism(result) -> None:
+    again = evaluate_extraction(count=40, seed=0)
+    assert again["total"] == result["total"]
+    assert again["correct"] == result["correct"]
+    assert again["accuracy"] == result["accuracy"]
+    assert again["by_template"] == result["by_template"]
+    assert again["by_component_count"] == result["by_component_count"]
+    assert again["failures"] == result["failures"]

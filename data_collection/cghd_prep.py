@@ -137,6 +137,11 @@ def parse_voc(xml_path: Path) -> tuple[int, int, list[tuple[str, int, int, int, 
         raise ValueError(f"No <size> element in {xml_path}")
     width  = int(size_el.findtext("width",  default="0"))
     height = int(size_el.findtext("height", default="0"))
+    # A zero/negative size would silently divide-by-zero during YOLO normalisation
+    # (caught as a generic "parse failure" upstream, dropping the image with a
+    # misleading message). Fail clearly instead.
+    if width <= 0 or height <= 0:
+        raise ValueError(f"non-positive image size {width}x{height} in {xml_path}")
 
     objects: list[tuple[str, int, int, int, int]] = []
     for obj in root.findall("object"):
@@ -199,11 +204,15 @@ def to_yolo_lines(
     """
     lines: list[str] = []
     for class_id, xmin, ymin, xmax, ymax in mapped_objs:
-        # Normalise: divide by the image dimension so values are in [0, 1].
-        cx = _clamp((xmin + xmax) / 2.0 / width)
-        cy = _clamp((ymin + ymax) / 2.0 / height)
-        w  = _clamp((xmax - xmin) / width)
-        h  = _clamp((ymax - ymin) / height)
+        # Clamp the CORNERS to [0,1] first, then derive centre/size from the clamped
+        # corners. Clamping cx/cy/w/h independently (the old way) breaks for boxes
+        # that overflow the image: e.g. a box from -5..105 px on a 100-px image
+        # would keep cx=0.5 but clamp w 1.1->1.0, so centre+width no longer
+        # reconstruct the (clamped) box. Corner-first keeps the box consistent.
+        x0, x1 = _clamp(xmin / width), _clamp(xmax / width)
+        y0, y1 = _clamp(ymin / height), _clamp(ymax / height)
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        w, h = x1 - x0, y1 - y0
         # Six decimal places is standard for YOLO labels; more is noise.
         lines.append(f"{class_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
     return lines

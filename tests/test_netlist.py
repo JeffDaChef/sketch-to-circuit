@@ -35,6 +35,16 @@ class TestParseValue:
         assert parse_value("2k2") == 2200
         assert parse_value("1M5") == 1_500_000
 
+    def test_scientific_notation_and_signs(self):
+        # to_spice() emits %g (e.g. '1e+06'); these must parse back so the
+        # round-trip works, and negative source values must be expressible.
+        assert parse_value("1e6") == 1_000_000
+        assert parse_value("1e+06") == 1_000_000
+        assert parse_value("2.2e3") == 2200
+        assert parse_value("1e-6") == pytest.approx(1e-6)
+        assert parse_value("-5") == -5
+        assert parse_value("-2.5e-3") == pytest.approx(-2.5e-3)
+
     def test_garbage_raises(self):
         for bad in ["", "abc", "10kk", "k10", "1.2.3"]:
             with pytest.raises(NetlistError):
@@ -68,6 +78,34 @@ class TestNetlist:
     def test_unknown_kind_rejected(self):
         with pytest.raises(NetlistError):
             Netlist().add("X", "X1", 1, "a", "b")
+
+    def test_nonpositive_passive_values_rejected(self):
+        # Zero/negative R, C, L are unphysical and would divide-by-zero in the solver.
+        for kind in ("R", "C", "L"):
+            with pytest.raises(NetlistError, match="positive"):
+                Netlist().add(kind, f"{kind}1", 0, "a", "b")
+            with pytest.raises(NetlistError, match="positive"):
+                Netlist().add(kind, f"{kind}2", -1, "a", "b")
+
+    def test_sources_may_be_zero_or_negative(self):
+        # A -5 V rail or a 0 A source is legitimate; only finiteness is required.
+        Netlist().add("V", "V1", -5, "a", "0")
+        Netlist().add("I", "I1", 0, "a", "0")
+
+    def test_non_finite_values_rejected(self):
+        with pytest.raises(NetlistError, match="finite"):
+            Netlist().add("V", "V1", float("inf"), "a", "0")
+        with pytest.raises(NetlistError, match="finite"):
+            Netlist().add("R", "R1", float("nan"), "a", "b")
+
+    def test_megohm_and_nanofarad_round_trip(self):
+        # The historical break: %g writes these in scientific notation.
+        n = Netlist()
+        n.add("R", "R1", 1e6, "a", "b")       # 1 MΩ -> "1e+06"
+        n.add("C", "C1", 100e-9, "b", "0")    # 100 nF -> "1e-07"
+        again = Netlist.from_spice(n.to_spice())
+        assert again.components[0].value == pytest.approx(1e6)
+        assert again.components[1].value == pytest.approx(100e-9)
 
     def test_spice_round_trip(self):
         n = self.make_divider()

@@ -249,61 +249,84 @@ def _point_in_bbox(pos: tuple[float, float], bbox: list[float], pad: float = 0.0
     return (bbox[0] - pad) <= x <= (bbox[2] + pad) and (bbox[1] - pad) <= y <= (bbox[3] + pad)
 
 
-def _thread_one(graph: nx.MultiGraph, node: int) -> bool:
-    """Split one degree-4 crossing node into two collinear pass-throughs.
+_COLLINEAR_DOT = -0.5     # two edges count as "the same straight wire" if their
+                          # directions are >120° apart (dot product below this)
 
-    Two wires crossing (a plain '+') skeletonise to a single branch node of
-    degree 4, which wrongly fuses the two wires into one electrical net. We undo
-    that: pair the four incident edges by direction — each wire continues roughly
-    straight, so the two most *opposite* edges belong to the same wire — and
-    rebuild the node as two separate nodes, one per wire. The crossing is then a
-    pass-over, not a connection.
+
+def _thread_cluster(graph: nx.MultiGraph, cluster: list[int]) -> bool:
+    """Thread the crossing formed by a cluster of branch nodes into two wires.
+
+    Two wires crossing fuse them into one electrical net. The crossing shows up in
+    the skeleton as either ONE degree-4 node (a clean right-angle '+') or, when the
+    wires meet at a shallow angle, TWO adjacent degree-3 nodes joined by a tiny
+    edge. Handling both, we treat the whole in-box cluster as the crossing: collect
+    the edges leaving it (ignoring edges internal to the cluster), and — since each
+    wire continues roughly straight — pair the two that point most nearly OPPOSITE
+    as one wire, the other two as the second wire. The cluster is then rebuilt as
+    two separate nodes, so connected-components sees two nets.
+
+    Returns False (leaving the graph untouched) when the cluster doesn't look like a
+    clean two-wire crossing: not exactly four edges leave it, or a chosen pair isn't
+    actually collinear (a 'hop'-drawn crossover already apart, a 3-way junction, or a
+    messy multi-node tangle). Graceful by design — better fused than mis-split.
     """
-    inc = list(graph.edges(node, keys=True, data=True))    # (node, other, key, data)
-    if len(inc) != 4 or any(v == node for _, v, _, _ in inc):
-        return False                                       # not a clean 4-way / has a self-loop
-    npos = graph.nodes[node]["pos"]
+    members = set(cluster)
+    pts = [graph.nodes[n]["pos"] for n in cluster]
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+
+    # Edges leaving the cluster (one endpoint inside, one outside).
+    external = []     # (other_node, length, pixels)
+    for n in cluster:
+        for _, other, _, data in graph.edges(n, keys=True, data=True):
+            if other not in members:
+                external.append((other, data.get("length", 0), data.get("pixels", [])))
+    if len(external) != 4:
+        return False
 
     def direction(other: int) -> tuple[float, float]:
-        op = graph.nodes[other]["pos"]
-        dx, dy = op[0] - npos[0], op[1] - npos[1]
-        n = math.hypot(dx, dy) or 1.0
-        return dx / n, dy / n
+        ox, oy = graph.nodes[other]["pos"]
+        dx, dy = ox - cx, oy - cy
+        mag = math.hypot(dx, dy) or 1.0
+        return dx / mag, dy / mag
 
-    dirs = [direction(e[1]) for e in inc]
-    # Pair edge 0 with whichever of the others points most nearly opposite to it
-    # (smallest, i.e. most negative, dot product); the remaining two are the pair.
+    dirs = [direction(e[0]) for e in external]
     rest = [1, 2, 3]
     j = min(rest, key=lambda k: dirs[0][0] * dirs[k][0] + dirs[0][1] * dirs[k][1])
     rest.remove(j)
-    pairs = ((inc[0], inc[j]), (inc[rest[0]], inc[rest[1]]))
+    pairs = [(0, j), (rest[0], rest[1])]
+
+    # Each pair must be genuinely opposite, or this isn't a pass-through crossing.
+    for a, b in pairs:
+        if dirs[a][0] * dirs[b][0] + dirs[a][1] * dirs[b][1] > _COLLINEAR_DOT:
+            return False
 
     base = max(graph.nodes) + 1
-    graph.remove_node(node)                                # drops the 4 fused edges
-    for offset, (e1, e2) in enumerate(pairs):
+    for n in cluster:
+        graph.remove_node(n)
+    for offset, (a, b) in enumerate(pairs):
         new = base + offset
-        graph.add_node(new, kind="branch", pos=npos)
-        for _, v, _, data in (e1, e2):
-            graph.add_edge(new, v, length=data.get("length", 0), pixels=data.get("pixels", []))
+        graph.add_node(new, kind="branch", pos=(cx, cy))
+        for idx in (a, b):
+            other, length, pixels = external[idx]
+            graph.add_edge(new, other, length=length, pixels=pixels)
     return True
 
 
 def thread_crossovers(graph: nx.MultiGraph, crossovers: list[dict]) -> int:
     """Thread every detected crossover in `graph`; return how many were split.
 
-    `crossovers` are component-style dicts with kind "crossover" and a bbox. For
-    each, any degree-4 branch node sitting inside the box is split. Anything that
-    isn't a clean 4-way (e.g. a 'hop'-drawn crossover whose wires never touched,
-    so the skeleton already keeps them apart) is left alone — graceful by design.
+    `crossovers` are component-style dicts with kind "crossover" and a bbox. The
+    branch nodes inside each box are treated as one crossing cluster and threaded
+    (handles both the clean degree-4 '+' and the shallow-angle two-degree-3 case).
+    Anything that doesn't look like a clean two-wire crossing is left alone.
     """
     threaded = 0
     for cx in crossovers:
-        bbox = cx["bbox"]
-        targets = [n for n, d in graph.nodes(data=True)
-                   if d["kind"] == "branch" and _point_in_bbox(d["pos"], bbox)]
-        for node in targets:
-            if graph.has_node(node) and _thread_one(graph, node):
-                threaded += 1
+        cluster = [n for n, d in graph.nodes(data=True)
+                   if d["kind"] == "branch" and _point_in_bbox(d["pos"], cx["bbox"])]
+        if cluster and _thread_cluster(graph, cluster):
+            threaded += 1
     return threaded
 
 

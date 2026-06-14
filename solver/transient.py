@@ -246,15 +246,25 @@ def solve_transient(
     capacitor_voltages: dict[str, list[float]] = {c.name: [v_prev[c.name]] for c in caps}
     inductor_currents: dict[str, list[float]] = {c.name: [i_prev[c.name]] for c in inds}
 
-    # Step forward. round() guards against floating-point drift in the step count.
-    n_steps = int(round(t_stop / dt))
+    # Plan the step sizes. Uniform dt, but if dt doesn't divide t_stop evenly we
+    # add ONE shorter final step so the last sample lands exactly on t_stop —
+    # otherwise the run silently stops short (e.g. t_stop=1, dt=0.3 -> 0.9) and
+    # final() would report the wrong "settled" value. (Companion models take the
+    # step size per call, so a variable last step is fine.)
+    n_round = int(round(t_stop / dt))
+    if abs(n_round * dt - t_stop) <= 1e-9 * max(t_stop, dt):
+        step_sizes = [dt] * n_round
+    else:
+        n_floor = int(t_stop // dt)
+        step_sizes = [dt] * n_floor + [t_stop - n_floor * dt]
+
     t = 0.0
-    for step_idx in range(n_steps):
-        t += dt
+    for step_idx, h in enumerate(step_sizes):
+        t += h
         # The very first step runs backward-Euler regardless: trapezoidal needs a
         # consistent previous current/voltage, which we only have after one step.
         method_used = "backward-euler" if step_idx == 0 else method
-        nl, companions = _step_netlist(netlist, v_prev, i_prev, dt, method_used, overrides(t))
+        nl, companions = _step_netlist(netlist, v_prev, i_prev, h, method_used, overrides(t))
         sol = step_solve(nl)
         # Recover each reactive element's new voltage and current, then record.
         for name, g, i_src, a, b in companions:

@@ -825,6 +825,45 @@ threading is unit-tested on bare skeleton graphs (a '+' splits into exactly the 
 wires) and end-to-end across jittered placements. Story upgrade: from "I constrained the problem
 to non-crossing wires" to "…and then I lifted the constraint."
 
+## File 18 — the hardening pass (an adversarial self-review)
+
+After the features were built, the whole codebase got an adversarial review — four independent
+passes (solver, vision, data/metrics, tests/training) hunting specifically for *real* bugs, not
+polish. Several genuine ones turned up and were fixed; finding and fixing them is itself the kind
+of engineering a reviewer respects, so they're worth recording:
+
+- **`parse_value` couldn't read its own output.** `to_spice()` writes big/small values in
+  scientific notation (`1e+06` for 1 MΩ), but the parser had no exponent rule, so
+  `from_spice(to_spice(...))` *threw* on any megohm resistor or sub-microfarad cap. The synthetic
+  generator never exceeds 100 kΩ, so every test passed while the round-trip was quietly broken.
+  Fix: try a plain `float()` first (covers scientific notation, decimals, and negative values —
+  the last also lets you write a −5 V rail as a string).
+- **A zero-ohm resistor crashed with a raw `ZeroDivisionError`** instead of a clean error.
+  Fix: `Component` now rejects non-positive or non-finite R/C/L values at construction (sources
+  may still be zero/negative — a −5 V rail is real), naming the offender.
+- **Transient runs silently stopped short.** With a step that didn't divide the stop time evenly
+  (`t_stop=1.0, dt=0.3`), the loop ended at 0.9 s, so `final()` reported the wrong instant's
+  voltage. Fix: a shorter final step lands the last sample exactly on `t_stop`.
+- **Crossover threading only handled perfect right-angle crossings.** A shallow-angle crossing
+  skeletonises to *two* adjacent degree-3 nodes, not one degree-4 node — and the old code only
+  split degree-4, so skewed crossings silently stayed fused (shorted). Fix: treat the whole
+  in-box cluster as the crossing, pair the four edges leaving it, and split — with a collinearity
+  guard so a 3-way junction or messy tangle is refused rather than mis-split.
+- **YOLO box export distorted boxes that overflow the image.** Clamping centre and width
+  independently (a box from −20…80 px kept centre 0.3 but clamped width) made centre+size stop
+  reconstructing the box. Fix: clamp the *corners*, then derive centre/size. Also, a zero image
+  size now fails with a clear message instead of a swallowed divide-by-zero.
+- **The per-class mAP table was mis-indexed.** ultralytics aligns per-class scores with the
+  classes *present* in the split, not the global class ids — so on a drafter-split test set
+  missing a rare class, the printed "resistor: 0.9" could actually be another class's score. Fix:
+  a pure, unit-tested `summarize_results()` walks `ap_class_index` correctly and lists truly-absent
+  classes separately. (Also: the start weights are COCO-pretrained, not ImageNet, and the output
+  path now matches the Colab instructions.)
+
+Each fix shipped with a test that fails on the old behaviour. The equivalence checker's
+polarity-blindness (a reversed diode scores as equal) was left as-is but is now documented as a
+known v2 limitation, since the extractor can't read diode orientation yet anyway.
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
@@ -842,8 +881,8 @@ real-photo defects will break extraction (speckle is the weak point), and an **e
 ablation** proves the skeleton-graph redesign lifted extraction from 40% to 100% over the old
 blob-proximity version. The transient solver now also does **inductors and RLC ringing** with a
 switchable backward-Euler/trapezoidal integrator, and the wire extractor now **handles crossing
-wires** (the no-crossing-wires constraint is lifted). 182 tests pass, 1 skipped (the live ngspice
-run, waiting on the install).
-The remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
-photographs (which need the trained detector from Phase 1, i.e. the dataset) — and the noise
-study already says where to start.
+wires** (the no-crossing-wires constraint is lifted). After an adversarial hardening pass
+(File 18) that fixed a handful of real boundary bugs, **195 tests pass, 1 skipped** (the live
+ngspice run, waiting on the install). The remaining Phase-2 work is hardening the extraction
+heuristics once we're feeding *real* photographs (which need the trained detector from Phase 1,
+i.e. the dataset) — and the noise study already says where to start.

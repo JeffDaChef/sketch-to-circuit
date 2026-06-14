@@ -134,8 +134,10 @@ project" from "this person does real work." Layer them on once the spine works:
   off-the-shelf / published CGHD mAP.)
 - **Hosted / shareable demo.** A tiny web page or recorded pipeline that a stranger can try or
   watch end-to-end — shows you can *ship*, not just prototype. (Low priority vs the above.)
-- **Reproducibility.** Seeds fixed, `requirements.txt` pinned, a one-command "regenerate all my
-  numbers" script. Quietly signals engineering discipline; also makes the writeup bulletproof.
+- **Reproducibility.** ✅ **Done.** Seeds fixed (every metric takes `--seed`), `requirements.txt`
+  pinned to exact versions, and a one-command `./reproduce.sh` (with `PYTHONHASHSEED=0`)
+  regenerates every number and figure. Quietly signals engineering discipline; also makes the
+  writeup bulletproof.
 
 > The metric infrastructure for most of these already exists: `solver/equivalence.py` +
 > `metrics/` give the accuracy number; the difficulty/ablation cuts are just *grouping* the

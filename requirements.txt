@@ -1,10 +1,18 @@
-# Phase 0 dependencies — install with: uv pip install -r requirements.txt
-schemdraw
-numpy
-networkx
-matplotlib
-pytest
+# Pinned dependencies for reproducible results.
+# Install into the project venv with:  uv pip install -r requirements.txt
+# Versions are exact (==) on purpose: the numbers in EXPLAINED.md / the writeup
+# were produced with these. Python 3.12 (see the .venv).
 
-# Phase 2 (vision / wire extraction)
-scikit-image
-scipy
+# Phase 0 — solver, netlist, synthetic generator
+schemdraw==0.23
+numpy==2.4.6
+networkx==3.6.1
+matplotlib==3.10.9
+
+# Phase 2 — vision / wire extraction
+scikit-image==0.26.0
+scipy==1.17.1
+pillow==12.2.0          # PIL.Image, used by the renderer in data_collection/extra_layouts.py
+
+# Tooling
+pytest==9.0.3

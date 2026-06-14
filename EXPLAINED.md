@@ -767,6 +767,24 @@ Supporting this, the alternative layouts (`corner_chain`, `mirrored_loop`) and t
 renderer moved out of the generalization test into `data_collection/extra_layouts.py`, so they're
 reusable by both the test and this ablation rather than locked inside a test file.
 
+## File 16 — `reproduce.sh` + pinned `requirements.txt` — making the numbers bulletproof
+
+A result you can't reproduce isn't really a result. This pass closes that gap. Two pieces:
+
+* **Pinned dependencies.** `requirements.txt` now nails every library to an exact version
+  (`numpy==2.4.6`, `scikit-image==0.26.0`, …) instead of "whatever's latest". The numbers in this
+  document were produced with those versions; a future install gets the same library behaviour,
+  not a silently-changed Otsu threshold or RNG.
+* **One-command regeneration.** `./reproduce.sh` runs the whole evidence chain from a clean
+  checkout — the test suite, the end-to-end extraction accuracy (200/200), the extractor ablation
+  (40% → 100%), the noise-robustness curves, and the solver demos — and writes every figure. It
+  sets `PYTHONHASHSEED=0` so dict/set ordering can't drift, and every metric already takes an
+  explicit `--seed`, so two runs match to the digit. The ngspice step skips cleanly until ngspice
+  is installed rather than aborting the run.
+
+This is the quiet engineering-discipline signal: seeds fixed, versions pinned, one command to
+regenerate everything. It also makes the eventual writeup bulletproof — anyone can re-run it.
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →

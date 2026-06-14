@@ -32,19 +32,22 @@ $PY -m pytest -q
 hr "2/6  End-to-end extraction accuracy (200 circuits, seed 0)"
 $PY -m metrics.extraction_accuracy --count 200 --seed 0
 
-hr "3/6  Extractor ablation: blob-proximity vs skeleton-graph (30 seeds × 5 layouts)"
+hr "3/7  Extractor ablation: blob-proximity vs skeleton-graph (30 seeds × 5 layouts)"
 $PY -m metrics.extractor_ablation --seeds 30
 
-hr "4/6  Noise-robustness study (80 circuits/level, seed 0) — takes a few minutes"
+hr "4/7  Difficulty curve: extraction accuracy vs circuit size"
+$PY -m metrics.difficulty --seeds 12 --max-size 12
+
+hr "5/7  Noise-robustness study (80 circuits/level, seed 0) — takes a few minutes"
 $PY -m metrics.noise_robustness --count 80 --seed 0
 
-hr "5/6  Solver demos (DC transient, nonlinear diodes, SPICE export)"
+hr "6/7  Solver demos (DC transient, nonlinear diodes, SPICE export)"
 $PY -m solver.transient
 $PY -m solver.nonlinear
 $PY -m solver.spice_export
 
-hr "6/6  ngspice validation (skips cleanly if ngspice isn't installed)"
+hr "7/7  ngspice validation (skips cleanly if ngspice isn't installed)"
 $PY -m solver.ngspice_validation || echo "(ngspice not installed — validation skipped; install it to run this step)"
 
 hr "Done"
-echo "Figures written: rc_charging.png, rlc_ringing.png, rectifier.png, noise_robustness.png, extractor_ablation.png"
+echo "Figures written: rc_charging.png, rlc_ringing.png, rectifier.png, noise_robustness.png, extractor_ablation.png, difficulty_curve.png"

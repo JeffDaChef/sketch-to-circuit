@@ -63,14 +63,17 @@ class CompBox:
 #   drawing, netlist, list of (element, kind, name, value-or-None) to be boxed.
 
 
-def _series_divider(rng: random.Random):
+def _series_divider(rng: random.Random, k: int | None = None):
     """A voltage source driving a vertical chain of resistors (a divider).
 
     Layout: source on the left going up; a wire across the top; then the
     resistors stacked going down the right-hand side back to ground. The nodes
     between resistors are the divider 'taps'.
+
+    `k` (optional) forces the number of resistors, for difficulty-scaling studies;
+    by default it's random in [2, 4] as before.
     """
-    k = rng.randint(2, 4)                       # how many resistors in the chain
+    k = k if k is not None else rng.randint(2, 4)   # how many resistors in the chain
     volts = rng.choice(SOURCE_VOLTAGES)
     netlist = Netlist()
     boxed = []                                  # (element, kind, name, value)
@@ -91,7 +94,13 @@ def _series_divider(rng: random.Random):
     for i in range(k):
         bottom_node = "0" if i == k - 1 else f"n{i + 2}"
         val = rng.choice(RESISTOR_VALUES)
-        res = elm.Resistor().down().label(val)
+        # loc="right" places the value label on the OUTER side of the column. The
+        # default (interior) side sits between the source and resistor columns, and
+        # at high resistor counts those label boxes crowd the wires there — and
+        # since the pipeline erases detected text, erasing a label over a wire would
+        # cut the connection. Keeping labels clear of the wiring is also just good
+        # schematic practice, and lets the difficulty study reach large circuits.
+        res = elm.Resistor().down().label(val, loc="right")
         d += res
         rname = f"R{i + 1}"
         netlist.add("R", rname, val, top_node, bottom_node)
@@ -118,14 +127,14 @@ def _series_divider(rng: random.Random):
     return d, netlist, boxed
 
 
-def _parallel_bank(rng: random.Random):
+def _parallel_bank(rng: random.Random, k: int | None = None):
     """A voltage source driving several resistors all in parallel.
 
     Layout: source on the left; a top rail and a bottom rail; resistors hang as
     vertical rungs between the rails, so every resistor sees the full source
     voltage. All rungs share the same two nodes -> parallel.
     """
-    k = rng.randint(2, 3)
+    k = k if k is not None else rng.randint(2, 3)
     volts = rng.choice(SOURCE_VOLTAGES)
     netlist = Netlist()
     boxed = []
@@ -176,7 +185,7 @@ def _parallel_bank(rng: random.Random):
     return d, netlist, boxed
 
 
-def _series_loop(rng: random.Random):
+def _series_loop(rng: random.Random, k: int | None = None):
     """A source on the left driving a chain of HORIZONTAL resistors.
 
     Layout: source standing on the left; resistors marching right along the
@@ -185,9 +194,10 @@ def _series_loop(rng: random.Random):
     code honest: it exercises horizontal components (left/right terminals) and
     a source-lead-to-resistor-lead connection with no junction dot — the exact
     things the first wire extractor couldn't handle (it scored 0/30 here; see
-    docs/wire_extraction_redesign_plan.md).
+    docs/wire_extraction_redesign_plan.md). `k` (optional) forces the chain length
+    for difficulty studies; default random [2, 4].
     """
-    k = rng.randint(2, 4)
+    k = k if k is not None else rng.randint(2, 4)
     volts = rng.choice(SOURCE_VOLTAGES)
     netlist = Netlist()
     boxed = []

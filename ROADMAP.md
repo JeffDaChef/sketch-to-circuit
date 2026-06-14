@@ -123,10 +123,13 @@ way. Difficulty added to an unfinished project reads as scattered.
 These cost little code but read as *research maturity* — the thing that separates "cool AI
 project" from "this person does real work." Layer them on once the spine works:
 
-- **Accuracy-vs-difficulty curve.** Don't report one number — report extraction accuracy
-  *broken down by circuit complexity* (2 components vs 5 vs 8, with/without junctions). "It's
-  98% on simple circuits and degrades to 70% past 6 components" is a real analysis a judge can
-  probe, and it's honest.
+- **Accuracy-vs-difficulty curve.** ✅ **Built** (`metrics/difficulty.py`). Forces circuit size
+  via the templates' new `k` param and charts accuracy vs component count: **100% up to ~10–12
+  components** across all three families, then a fall-off the study honestly attributes to the
+  fixed render resolution (components shrink below the skeletoniser's limit), not a logic failure.
+  Building it caught — and fixed — a benchmark artifact (value labels crowding the wiring at high
+  density were getting erased and cutting connections; `loc="right"` fixed it), which is itself a
+  strong "I tell artifacts from real limits" story. Replaces the hollow "100% on 2–5 components".
 - **Ablation study.** Show a number *with and without* a design choice. ✅ **First one done:**
   the extractor ablation (`metrics/extractor_ablation.py`) — blob-proximity vs skeleton-graph,
   40% → 100% overall. More to come (e.g. drafter split vs naive random split once training runs,

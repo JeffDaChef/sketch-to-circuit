@@ -11,8 +11,17 @@ import math
 
 import pytest
 
-from solver.ac import ACError, logspace, solve_ac, transfer_function
+from solver.ac import (
+    ACError,
+    logspace,
+    operating_point,
+    small_signal_ac,
+    small_signal_transfer_function,
+    solve_ac,
+    transfer_function,
+)
 from solver.netlist import Netlist
+from solver.nonlinear import SILICON
 
 
 def rc_lowpass(R=1000.0, C=1e-6):
@@ -100,3 +109,65 @@ def test_errors():
         solve_ac(nd, 100.0)
     with pytest.raises(ACError, match="not a voltage source"):
         transfer_function(n, [10, 100], "out", "R1")
+
+
+# --- small-signal AC (diodes linearised at the DC operating point) -----------
+
+def _diode_bias_circuit(ibias):
+    """vin (AC) -> D1 -> mid -> C -> 0 ; I_bias (mid->0) sets the diode current."""
+    n = Netlist()
+    n.add("V", "vin", 0.0, "in", "0")
+    n.add("D", "D1", 0.0, "in", "mid")
+    n.add("C", "C1", 1e-6, "mid", "0")
+    n.add("I", "Ibias", ibias, "mid", "0")
+    return n
+
+
+def test_small_signal_resistance_matches_26mv_over_i():
+    # The defining small-signal result: r_d = n·V_t / I_D.
+    for ibias in (1e-4, 1e-3, 5e-3):
+        net = _diode_bias_circuit(ibias)
+        vd, rd = operating_point(net)["D1"]
+        from solver.nonlinear import solve_nonlinear
+        i_d = solve_nonlinear(net).branch_currents["D1"]
+        assert rd == pytest.approx(SILICON.n * SILICON.V_t / i_d, rel=1e-3)
+
+
+def test_reverse_biased_diode_is_high_resistance():
+    # Diode reverse-biased -> tiny slope -> r_d is enormous (≈ open circuit).
+    n = Netlist()
+    n.add("V", "vin", 0.0, "in", "0")
+    n.add("D", "D1", 0.0, "in", "mid")          # anode 'in'(0V), cathode 'mid'
+    n.add("R", "Rpull", 1000.0, "mid", "0")     # holds mid near 0 -> diode ~0V/reverse
+    n.add("I", "Irev", 1e-6, "0", "mid")        # pulls mid slightly positive -> reverse
+    _, rd = operating_point(n)["D1"]
+    assert rd > 1e6                              # effectively open
+
+
+def test_bias_tunable_lowpass_cutoff_tracks_bias():
+    # The headline: a diode + cap is a low-pass whose cutoff f_c = 1/(2π r_d C)
+    # moves with the bias current. Check |H| ≈ -3 dB at the predicted cutoff, and
+    # that 10x bias gives ~10x cutoff.
+    fcs = []
+    for ibias in (1e-4, 1e-3):
+        net = _diode_bias_circuit(ibias)
+        _, rd = operating_point(net)["D1"]
+        fc = 1.0 / (2 * math.pi * rd * 1e-6)
+        fcs.append(fc)
+        sweep = small_signal_transfer_function(net, [fc], "mid", "vin")
+        assert sweep["mag"][0] == pytest.approx(1 / math.sqrt(2), rel=0.02)   # -3 dB at f_c
+    assert fcs[1] / fcs[0] == pytest.approx(10.0, rel=0.05)    # 10x bias -> 10x cutoff
+
+
+def test_small_signal_reduces_to_linear_without_diodes():
+    # With no diodes, small-signal AC == ordinary AC (same transfer function).
+    n, _, _ = rc_lowpass()
+    a = small_signal_transfer_function(n, [100.0, 1000.0], "out", "Vin")
+    b = transfer_function(n, [100.0, 1000.0], "out", "Vin")
+    for ha, hb in zip(a["H"], b["H"]):
+        assert ha == pytest.approx(hb, rel=1e-9)
+
+
+def test_small_signal_ac_returns_complex_phasors():
+    res = small_signal_ac(_diode_bias_circuit(1e-3), 1000.0)
+    assert isinstance(res.gain("mid"), complex)

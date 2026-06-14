@@ -38,6 +38,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from solver.netlist import GROUND, Netlist
+from solver.nonlinear import SILICON, DiodeModel, solve_nonlinear
 
 
 class ACError(Exception):
@@ -174,6 +175,94 @@ def transfer_function(netlist: Netlist, freqs, output_node: str, input_source: s
     }
 
 
+# --- small-signal AC (diodes linearised at the DC operating point) -----------
+
+def _diode_resistances(netlist: Netlist, models, default_model: DiodeModel):
+    """Solve the DC operating point and return {diode_name: small-signal r_d}.
+
+    A diode's small-signal resistance is r_d = 1/(dI/dV) at its bias point, which
+    the DiodeModel already gives as 1/conductance(V_D). At room temperature this is
+    the classic r_d ≈ n·V_t/I_D ("26 mV / I_D"). A reverse-biased diode has a
+    near-zero slope, so r_d is capped at a large finite value (effectively open).
+    """
+    res = solve_nonlinear(netlist, models=models, default_model=default_model)
+    models = dict(models or {})
+    rds: dict[str, float] = {}
+    for c in netlist.components:
+        if c.kind == "D":
+            m = models.get(c.name, default_model)
+            vd = res.node_voltages[c.nodes[0]] - res.node_voltages[c.nodes[1]]
+            rds[c.name] = 1.0 / max(m.conductance(vd), 1e-12)
+    return rds, res
+
+
+def operating_point(netlist: Netlist, models=None, default_model: DiodeModel = SILICON) -> dict:
+    """DC bias point → {diode_name: (V_D, r_d)} (voltage across, small-signal resistance)."""
+    rds, res = _diode_resistances(netlist, models, default_model)
+    return {c.name: (res.node_voltages[c.nodes[0]] - res.node_voltages[c.nodes[1]], rds[c.name])
+            for c in netlist.components if c.kind == "D"}
+
+
+def small_signal_ac(netlist: Netlist, freq: float, models=None,
+                    default_model: DiodeModel = SILICON) -> ACResult:
+    """AC at one frequency with each diode replaced by its small-signal r_d.
+
+    Building block: linearise around the DC operating point, then run the linear
+    AC solver with the netlist's source values as AC phasors. (For a normalised
+    transfer function with the bias sources zeroed for AC, use
+    small_signal_transfer_function.)
+    """
+    rds, _ = _diode_resistances(netlist, models, default_model)
+    lin = Netlist()
+    for c in netlist.components:
+        if c.kind == "D":
+            lin.add("R", f"{c.name}__rd", rds[c.name], c.nodes[0], c.nodes[1])
+        else:
+            lin.add(c.kind, c.name, c.value, c.nodes[0], c.nodes[1])
+    return solve_ac(lin, freq)
+
+
+def small_signal_transfer_function(netlist: Netlist, freqs, output_node: str,
+                                   input_source: str, models=None,
+                                   default_model: DiodeModel = SILICON) -> dict:
+    """H(f) = V(output)/V(input) for a circuit with diodes, linearised at the bias.
+
+    The DC operating point is found from the netlist's source values (the bias);
+    then for the AC sweep the input source is driven at amplitude 1 and every OTHER
+    independent source is set to its AC value of zero — because a DC supply is an AC
+    ground (a fixed voltage source → short, a fixed current source → open). This is
+    the standard small-signal AC procedure, and it makes a diode a *bias-tunable*
+    element: r_d depends on the DC current, so e.g. a diode + capacitor is a filter
+    whose cutoff you set with a bias current.
+    """
+    src = next((c for c in netlist.components if c.name == input_source), None)
+    if src is None or src.kind != "V":
+        raise ACError(f"input_source {input_source!r} is not a voltage source in the netlist")
+    rds, _ = _diode_resistances(netlist, models, default_model)
+
+    ac_net = Netlist()
+    for c in netlist.components:
+        if c.kind == "D":
+            ac_net.add("R", f"{c.name}__rd", rds[c.name], c.nodes[0], c.nodes[1])
+        elif c.kind == "V":
+            ac_net.add("V", c.name, 1.0 if c.name == input_source else 0.0, c.nodes[0], c.nodes[1])
+        elif c.kind == "I":
+            ac_net.add("I", c.name, 0.0, c.nodes[0], c.nodes[1])     # DC current source -> AC open
+        else:
+            ac_net.add(c.kind, c.name, c.value, c.nodes[0], c.nodes[1])
+
+    freq_list = list(freqs)
+    H = [solve_ac(ac_net, f).node_voltages[output_node] for f in freq_list]   # V_in = 1
+    mag = [abs(h) for h in H]
+    return {
+        "freq": freq_list,
+        "H": H,
+        "mag": mag,
+        "mag_db": [20.0 * math.log10(m) if m > 0 else -np.inf for m in mag],
+        "phase_deg": [math.degrees(cmath.phase(h)) for h in H],
+    }
+
+
 def save_bode_plot(sweep: dict, path: str, title: str = "Bode plot") -> None:
     """Save a two-panel Bode plot (magnitude in dB and phase) from a sweep dict."""
     import matplotlib
@@ -219,6 +308,31 @@ def _demo() -> int:
     save_bode_plot(transfer_function(bp, logspace(f0/100, f0*100), "b", "Vin"),
                    "bode_bandpass.png", title=f"Series-RLC band-pass (f_0 ≈ {f0:.0f} Hz)")
     print("  saved bode_bandpass.png")
+
+    # Small-signal: a diode is a BIAS-TUNABLE resistor (r_d = n·V_t/I_D), so a
+    # diode + capacitor is a low-pass whose cutoff you set with a DC bias current.
+    # vin (AC) -> D1 -> mid -> C -> 0 ; I_bias (mid->0) sets the diode current.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    print("\nSmall-signal: bias-tunable RC low-pass (diode r_d + C, C = 1 µF):")
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    for ibias in (1e-4, 1e-3):
+        net = Netlist()
+        net.add("V", "vin", 0.0, "in", "0")      # pure AC input (no DC bias of its own)
+        net.add("D", "D1", 0.0, "in", "mid")
+        net.add("C", "C1", 1e-6, "mid", "0")
+        net.add("I", "Ibias", ibias, "mid", "0")  # DC bias current sets r_d
+        vd, rd = operating_point(net)["D1"]
+        fc = 1.0 / (2 * math.pi * rd * 1e-6)
+        sweep = small_signal_transfer_function(net, logspace(10, 1e6), "mid", "vin")
+        ax.semilogx(sweep["freq"], sweep["mag_db"], label=f"I_bias={ibias*1e3:.1f} mA  (r_d≈{rd:.0f}Ω, f_c≈{fc:.0f} Hz)")
+        print(f"  I_bias={ibias*1e3:>4.1f} mA -> r_d = {rd:6.1f} Ω -> cutoff f_c = {fc:6.0f} Hz")
+    ax.set_xlabel("frequency (Hz)"); ax.set_ylabel("magnitude (dB)")
+    ax.set_title("Bias-tunable low-pass: a diode's r_d sets the cutoff")
+    ax.grid(True, which="both", alpha=0.3); ax.legend()
+    fig.tight_layout(); fig.savefig("bode_diode_tunable.png", dpi=110); plt.close(fig)
+    print("  saved bode_diode_tunable.png (cutoff shifts ~10x with 10x bias)")
     return 0
 
 

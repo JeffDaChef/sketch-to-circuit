@@ -918,8 +918,26 @@ and the solver nails its signature exactly — at the cutoff f_c = 1/(2πRC) the
 at **|H| = 1.0 at f_0 = 1/(2π√(LC))** and rolls off symmetrically either side. `python -m
 solver.ac` prints those checks and saves `bode_lowpass.png` and `bode_bandpass.png`. The solver
 is now a four-mode engine — **DC, transient, non-linear, and AC** — all on the one MNA core.
-(Scope: linear AC; a diode would need small-signal linearisation around a DC operating point,
-which is refused with a clear error for now.)
+
+**Small-signal AC — where the non-linear and AC solvers meet.** A diode is non-linear, so it has
+no single impedance — *until* you pin it to a bias point. `small_signal_ac` /
+`small_signal_transfer_function` do exactly what real analog design does: first solve the
+**DC operating point** (`solve_nonlinear`) to find each diode's bias voltage, then replace the
+diode with its **small-signal resistance** r_d = 1/(dI/dV) at that point — which the DiodeModel
+already gives as 1/conductance(V_D), and which works out to the textbook **r_d = n·V_t/I_D**
+("≈ 26 mV / I_D" at room temperature, verified by test). For the AC sweep the input source is
+driven at amplitude 1 and every other DC source is treated as an AC ground (a fixed voltage →
+short, a fixed current → open), the standard small-signal procedure.
+
+The consequence is genuinely cool and whiteboard-defensible: because r_d is set by the bias
+current, **a diode is a current-controlled resistor**, so a diode + capacitor is a *bias-tunable*
+filter. The demo builds exactly that and the numbers land on theory — at 0.1 mA the diode is
+≈259 Ω giving a 616 Hz cutoff, and at 1 mA it's ≈26 Ω giving 6156 Hz: ten times the bias, ten
+times the cutoff (`bode_diode_tunable.png` shows both curves). That's the principle behind diode
+attenuators, AGC, and mixers, falling straight out of composing the two solvers.
+
+(Scope: a diode's r_d only — junction capacitance, which would add its own frequency dependence,
+is a further refinement.)
 
 ## Where the build stands now
 
@@ -941,9 +959,10 @@ switchable backward-Euler/trapezoidal integrator, and the wire extractor now **h
 wires** (the no-crossing-wires constraint is lifted). After an adversarial hardening pass
 (File 18) that fixed a handful of real boundary bugs, and a difficulty study (File 19) that turned
 the hollow "100% on 2–5 components" into a demonstrated *100% up to ~10–12 components* with an
-honest fall-off, **plus** an AC / frequency-domain solver (File 20) that produces verified Bode
-plots — making the engine a four-mode suite (DC, transient, non-linear, AC) — **206 tests pass,
-1 skipped** (the live ngspice run, waiting on the install). The remaining Phase-2 work is
-hardening the extraction heuristics once we're feeding *real*
+honest fall-off, **plus** an AC / frequency-domain solver (File 20) — including small-signal AC
+that linearises a diode at its bias point, making it a *bias-tunable* element — that produces
+verified Bode plots, rounding the engine into a four-mode suite (DC, transient, non-linear, AC),
+**211 tests pass, 1 skipped** (the live ngspice run, waiting on the install). The remaining
+Phase-2 work is hardening the extraction heuristics once we're feeding *real*
 photographs (which need the trained detector from Phase 1, i.e. the dataset) — and the noise study
 already says where to start.

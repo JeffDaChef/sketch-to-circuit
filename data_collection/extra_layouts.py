@@ -64,6 +64,62 @@ def render(d, boxed):
     return image, comps
 
 
+def crossover_circuit(rng: random.Random | None = None):
+    """A circuit with ONE genuine wire crossover, drawn directly for full control.
+
+    Topology (a series divider): V1: n1→0, R1: n1→n2, R2: n2→0. It is laid out so
+    the **n1** horizontal rail and the **n2** vertical wire *cross without
+    connecting*. If that crossing is treated as a normal junction the two nets fuse
+    (n1≡n2) and R1 becomes a short — the whole reason the no-crossing-wires
+    constraint existed. With crossover handling the three nets stay distinct.
+
+    Unlike the schemdraw makers above this is rasterised directly (axis-aligned
+    segments) because forcing schemdraw to draw a clean, single, known-location
+    crossing is far more fragile than placing the pixels ourselves. Returns
+    ``(image, components, truth)`` where ``components`` already includes the
+    ``crossover`` box (the detector stand-in); drop it to see the un-threaded
+    failure. `rng` (optional) jitters the whole drawing so a suite gets variety.
+    """
+    rng = rng or random.Random(0)
+    ox, oy = rng.randint(-12, 12), rng.randint(-12, 12)        # global translation jitter
+    va, vb = rng.choice(RESISTOR_VALUES), rng.choice(RESISTOR_VALUES)
+    volts = rng.choice(SOURCE_VOLTAGES)
+
+    H, W = 460, 420
+    img = np.full((H, W), 255, dtype=np.uint8)
+
+    def hseg(y, x0, x1, t=2):
+        img[y - t:y + t + 1, min(x0, x1):max(x0, x1) + 1] = 0
+    def vseg(x, y0, y1, t=2):
+        img[min(y0, y1):max(y0, y1) + 1, x - t:x + t + 1] = 0
+
+    # All coordinates are shifted by the (ox, oy) jitter via these helpers.
+    def hx(y, x0, x1): hseg(y + oy, x0 + ox, x1 + ox)
+    def vx(x, y0, y1): vseg(x + ox, y0 + oy, y1 + oy)
+    def box(x0, y0, x1, y1): return [x0 + ox, y0 + oy, x1 + ox, y1 + oy]
+
+    # net n1: rail + riser + source/R1 stubs
+    hx(240, 90, 330); vx(330, 120, 240); vx(90, 240, 260); hx(120, 310, 330)
+    # net n2: R1 stub + the vertical wire that crosses the n1 rail at (210, 240)
+    hx(120, 210, 230); vx(210, 120, 300)
+    # net 0: source foot + bottom rail + R2 foot
+    vx(90, 360, 400); hx(400, 90, 210); vx(210, 380, 400)
+
+    components = [
+        {"name": "V1", "kind": "voltage source", "value": f"{volts}V", "bbox": box(60, 260, 120, 360)},
+        {"name": "R1", "kind": "resistor", "value": va, "bbox": box(230, 100, 310, 140)},
+        {"name": "R2", "kind": "resistor", "value": vb, "bbox": box(185, 300, 235, 380)},
+        {"name": "GND", "kind": "ground", "value": None, "bbox": box(125, 385, 175, 415)},
+        {"name": "X1", "kind": "crossover", "value": None, "bbox": box(190, 220, 230, 260)},
+    ]
+
+    truth = Netlist()
+    truth.add("V", "V1", volts, "n1", "0")
+    truth.add("R", "R1", va, "n1", "n2")
+    truth.add("R", "R2", vb, "n2", "0")
+    return img, components, truth
+
+
 def make_corner_chain(rng: random.Random):
     """A chain that TURNS A CORNER: resistors right along the top, then DOWN.
 

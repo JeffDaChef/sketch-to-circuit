@@ -797,6 +797,34 @@ A result you can't reproduce isn't really a result. This pass closes that gap. T
 This is the quiet engineering-discipline signal: seeds fixed, versions pinned, one command to
 regenerate everything. It also makes the eventual writeup bulletproof — anyone can re-run it.
 
+## File 17 — crossover handling — lifting the no-crossing-wires constraint
+
+v1 of the extractor banned crossing wires, because a plain '+' where two wires cross *without
+connecting* skeletonises to a single branch node of degree 4 — and the net-building step
+(connected components of the skeleton graph) then fuses the two wires into one electrical net.
+On a real circuit that's catastrophic: in the test circuit it makes resistor R1's two ends land
+on the *same* net, i.e. a short. Banning crossings sidestepped the problem; this lifts the ban.
+
+**The fix is graph surgery at the crossing.** Given a crossover's location (a `crossover`
+bounding box — the same detector-stand-in idea used for components; CGHD has a `crossover`
+class), we find the degree-4 node inside it and *thread the two wires through* instead of letting
+them fuse. The key insight is that each wire continues roughly straight, so of the four edges
+meeting at the crossing, the two pointing most nearly *opposite* each other (most negative
+direction dot-product) belong to the same wire. We pair them that way and rebuild the one fused
+node as two separate nodes — one per wire. Connected-components then sees two nets, correctly.
+Two small but important details: the crossover box is *not* erased (unlike a component — we need
+its pixels to form the node we're about to thread), and anything that isn't a clean 4-way (e.g. a
+'hop'/bridge-drawn crossover whose wires never actually touched, so the skeleton already keeps
+them apart) is left untouched — graceful by design.
+
+**The proof is a before/after, like the extractor ablation.** On a series-divider laid out so the
+n1 rail crosses the n2 wire: *with* the crossover box the extractor recovers the correct three
+nets; *without* it, n1 and n2 fuse and R1 comes out shorted — so the extraction is wrong. That
+control is what shows the crossover handling itself is doing the work, not something else. The
+threading is unit-tested on bare skeleton graphs (a '+' splits into exactly the two collinear
+wires) and end-to-end across jittered placements. Story upgrade: from "I constrained the problem
+to non-crossing wires" to "…and then I lifted the constraint."
+
 ## Where the build stands now
 
 Built and tested end-to-end on synthetic data: detect-stand-in (ground-truth boxes) →
@@ -813,8 +841,9 @@ KiCad open directly. On the measurement side, a **noise-robustness study** now f
 real-photo defects will break extraction (speckle is the weak point), and an **extractor
 ablation** proves the skeleton-graph redesign lifted extraction from 40% to 100% over the old
 blob-proximity version. The transient solver now also does **inductors and RLC ringing** with a
-switchable backward-Euler/trapezoidal integrator. 172 tests pass, 1 skipped (the live ngspice run,
-waiting on the install).
+switchable backward-Euler/trapezoidal integrator, and the wire extractor now **handles crossing
+wires** (the no-crossing-wires constraint is lifted). 182 tests pass, 1 skipped (the live ngspice
+run, waiting on the install).
 The remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
 photographs (which need the trained detector from Phase 1, i.e. the dataset) — and the noise
 study already says where to start.

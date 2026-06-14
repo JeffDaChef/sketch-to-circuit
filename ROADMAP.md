@@ -46,10 +46,11 @@ for once the core is solid.
   resistor ∥ current source per step, so every instant is a plain R/V/I circuit handed to the
   existing (ngspice-validated) `solve()`. No second solver written. Matches the analytic RC
   curve (3.151 V vs theory's 3.16 V at one time constant); `python -m solver.transient` saves
-  the charging curve. 7 tests incl. the analytic-curve anchor. **Remaining/follow-ups:**
-  inductors (needs an 'L' kind in the data model), time-varying sources (step/sine inputs),
-  trapezoidal integration (the `method` hook is already in place), and a *live* animated curve
-  for the demo (currently a saved PNG). Companion-model approach means transient results are
+  the charging curve. 18 tests incl. the analytic-curve anchor. **Now also built:** time-varying
+  sources (sine), inductors ('L' kind, DC short + transient companion), series-RLC ringing, and
+  trapezoidal integration (~20× more accurate than backward-Euler on the RC curve — a numerical
+  ablation). **Remaining follow-up:** a *live* animated curve for the demo (currently saved
+  PNGs: rc_charging, rlc_ringing, rectifier). Companion-model approach means transient results are
   themselves ngspice-validatable.
 - **Critique that computes consequences.** The planned LLM "explain/critique" mode should go
   past "LED with no resistor" to the actual number: "this LED sees ~45 mA vs its 20 mA rating
@@ -87,8 +88,10 @@ roadmap. These levers add *genuine* depth beyond that, ranked by hardness-per-im
    ✅ **Combined too:** transient now runs Newton-Raphson *inside* each time step when diodes
    are present, plus time-varying sources (`sine()` helper) — so a **half-wave rectifier with a
    smoothing capacitor** simulates end-to-end (output 4.28 V, sub-volt ripple; `rectifier.png`).
-   That one demo exercises all three solvers at once. **Still open:** inductors (need an 'L'
-   kind); trapezoidal integration (`method` hook ready); a *live* animated curve for the demo.
+   That one demo exercises all three solvers at once. ✅ **Also now done:** inductors ('L' kind,
+   DC short + transient companion model), series-RLC ringing, and trapezoidal integration
+   (~20× more accurate than backward-Euler on RC — a numerical-methods ablation). **Still open:**
+   a *live* animated curve for the demo (currently saved PNGs).
 3. **Noise-robustness study (rigor + Phase-2 prep).** ✅ **Built** (`metrics/noise_robustness.py`).
    Corrupts synthetic images (Gaussian blur, Gaussian noise, salt-pepper speckle) at rising
    severity and publishes the accuracy-vs-severity curve (`noise_robustness.png`). Findings (80

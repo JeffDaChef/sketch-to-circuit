@@ -45,9 +45,9 @@ _(166 tests passing, 1 skipped — the live ngspice run, pending a one-time inst
 - [x] Project brief & plan
 - [x] **Phase 0:** synthetic pipeline — netlist + MNA solver + generator + end-to-end demo
 - [x] **Solver, expanded:** the MNA core is now a real numerical engine — **DC**, **transient**
-  (RC/RLC via backward-Euler companion models, time-varying sources), and **nonlinear**
-  (real diodes/LEDs via Newton-Raphson). Plus an **ngspice validation** harness and **SPICE/KiCad
-  export**.
+  (RC/RL/RLC via companion models, backward-Euler *or* trapezoidal, time-varying sources), and
+  **nonlinear** (real diodes/LEDs via Newton-Raphson). Plus an **ngspice validation** harness and
+  **SPICE/KiCad export**.
 - [~] **Phase 1:** YOLO detector on CGHD — data-prep + training/eval scripts written & tested;
   awaiting dataset download + Colab training run
 - [x] **Phase 2:** wire extraction — recovers the netlist from an image + boxes; **200/200**

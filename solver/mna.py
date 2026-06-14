@@ -20,8 +20,11 @@ because a voltage source fixes a voltage instead of obeying Ohm's law.
 
 SCOPE (v1): linear DC only — resistors (R), ideal voltage sources (V), ideal
 current sources (I). Capacitors (C) are open circuits at DC, so they are ignored.
-Diodes/LEDs (D) are non-linear and need Newton-Raphson iteration (a later phase),
-so for now we refuse them with a clear error.
+Inductors (L) are short circuits at DC (no voltage across them in steady state),
+so they are handled exactly like a 0 V voltage source — same "modified" trick,
+adding one branch-current unknown each. Diodes/LEDs (D) are non-linear and need
+Newton-Raphson iteration (solver/nonlinear.py), so here we refuse them with a
+clear error.
 """
 
 from __future__ import annotations
@@ -83,8 +86,9 @@ def solve(netlist: Netlist) -> SolveResult:
     node_index = {name: i for i, name in enumerate(nodes)}
     n = len(nodes)                                      # number of node-voltage unknowns
 
-    # Unknown set 2: the current through each ideal voltage source.
-    vsources = [c for c in netlist.components if c.kind == "V"]
+    # Unknown set 2: the current through each ideal voltage source AND each
+    # inductor (a short = a 0 V source, so it needs the same branch-current unknown).
+    vsources = [c for c in netlist.components if c.kind in ("V", "L")]
     vsource_index = {c.name: n + k for k, c in enumerate(vsources)}
     m = len(vsources)                                  # number of source-current unknowns
 
@@ -137,7 +141,9 @@ def solve(netlist: Netlist) -> SolveResult:
         if q != GROUND:
             A[node_index[q], s] -= 1
             A[s, node_index[q]] -= 1
-        z[s] = c.value                                 # the right-hand side is the source's voltage
+        # RHS is the forced voltage across the branch: the source's value for a
+        # real voltage source, exactly 0 for an inductor (a DC short).
+        z[s] = c.value if c.kind == "V" else 0.0
 
     # --- solve the linear system A x = z ------------------------------------
     # numpy does the heavy lifting: one call returns the vector of all unknowns.
@@ -155,11 +161,14 @@ def solve(netlist: Netlist) -> SolveResult:
     for name, i in node_index.items():
         node_voltages[name] = float(x[i])
 
-    source_currents = {c.name: float(x[vsource_index[c.name]]) for c in vsources}
+    # Voltage sources are reported as source currents; an inductor's solved branch
+    # current is a branch current (it isn't a "source"), so it goes below.
+    source_currents = {c.name: float(x[vsource_index[c.name]])
+                       for c in vsources if c.kind == "V"}
 
     # Resistor currents follow from Ohm's law now that we know the voltages;
-    # current-source currents are simply their set value. These feed the
-    # current-arrow overlay later.
+    # current-source currents are simply their set value; an inductor's current is
+    # the branch-current unknown we solved for. These feed the current-arrow overlay.
     branch_currents: dict[str, float] = {}
     for c in netlist.components:
         if c.kind == "R":
@@ -167,5 +176,7 @@ def solve(netlist: Netlist) -> SolveResult:
             branch_currents[c.name] = (va - vb) / c.value
         elif c.kind == "I":
             branch_currents[c.name] = c.value
+        elif c.kind == "L":
+            branch_currents[c.name] = float(x[vsource_index[c.name]])
 
     return SolveResult(node_voltages, source_currents, branch_currents)

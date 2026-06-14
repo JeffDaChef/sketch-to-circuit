@@ -633,10 +633,22 @@ drop) with sub-volt ripple — and `python -m solver.transient` saves `rectifier
 smoothed output riding on top of the raw sine. That single picture exercises all three solvers at
 once: time-stepping, Newton-Raphson, and the linear core underneath both.
 
-Scope today: capacitors, optionally with diodes and/or time-varying sources. Inductors and
-trapezoidal integration (more accurate, can ring) are the remaining easy follow-ups — the
-`method` hook is already there. Backward-Euler is the default because it's unconditionally
-stable: it never invents oscillations that aren't physically there.
+**Inductors, RLC ringing, and trapezoidal integration.** The companion-model trick generalises
+straight to inductors: an inductor obeys v = L·di/dt, which backward-Euler turns into a
+conductance h/L in parallel with a current source carrying *last step's current* — the dual of
+the capacitor's model. (At DC an inductor is a short, which the linear solver now handles too, as
+a 0 V source.) With both L and C present you get the circuit that actually *oscillates*: a series
+**RLC** step response rings — the capacitor voltage overshoots the 5 V step to ~8.6 V, swings
+back, and spirals down to 5 V (verified against the underdamped condition R < 2√(L/C)). The RL
+build also matches its analytic curve i(t) = (V/R)(1−e^(−t·R/L)) to within rounding.
+
+The integration rule is now switchable via `method`: **backward-Euler** (default, unconditionally
+stable — never invents oscillations) or **trapezoidal** (2nd-order accurate). The accuracy
+difference is real and measured: on the RC curve at one time constant, trapezoidal's error is
+~0.002 V vs backward-Euler's ~0.045 V at the same step — about 20× better — which is a clean
+numerical-methods ablation. (Trapezoidal needs a consistent starting current, so the very first
+step always runs in backward-Euler to bootstrap it.) `python -m solver.transient` now also saves
+`rlc_ringing.png` showing the damped oscillation under both methods.
 
 ## File 12 — `solver/nonlinear.py` — real diodes via Newton-Raphson
 
@@ -800,7 +812,9 @@ solve — and circuits can now be **exported to a runnable SPICE `.cir`** that n
 KiCad open directly. On the measurement side, a **noise-robustness study** now forecasts which
 real-photo defects will break extraction (speckle is the weak point), and an **extractor
 ablation** proves the skeleton-graph redesign lifted extraction from 40% to 100% over the old
-blob-proximity version. 166 tests pass, 1 skipped (the live ngspice run, waiting on the install).
+blob-proximity version. The transient solver now also does **inductors and RLC ringing** with a
+switchable backward-Euler/trapezoidal integrator. 172 tests pass, 1 skipped (the live ngspice run,
+waiting on the install).
 The remaining Phase-2 work is hardening the extraction heuristics once we're feeding *real*
 photographs (which need the trained detector from Phase 1, i.e. the dataset) — and the noise
 study already says where to start.

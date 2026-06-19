@@ -6,7 +6,7 @@ software detects components, traces wires, builds a netlist, solves the circuit 
 from-scratch Modified Nodal Analysis (MNA) engine, and overlays the computed node
 voltages and branch currents back onto the live camera image.
 
-**📄 [Technical paper / write-up](docs/paper.md)** · **🌐 [Project website](https://jeffdacheff.github.io/sketch-to-circuit/)**
+**📄 [Technical paper / write-up](docs/paper.md)** · **🌐 [Project website](https://jeffdachef.github.io/sketch-to-circuit/)**
 
 Full project spec: [`sketch_to_circuit_brief.md`](sketch_to_circuit_brief.md)
 Plain-English explanation of all the code: [`EXPLAINED.md`](EXPLAINED.md)

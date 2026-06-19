@@ -21,24 +21,19 @@ from metrics.extraction_accuracy import evaluate_extraction
 
 @pytest.fixture(scope="module")
 def result() -> dict:
-    # Module-scoped: the 40-circuit run happens once and is shared by every test.
     return evaluate_extraction(count=40, seed=0)
 
 
-# --- headline number ---------------------------------------------------------
 
 def test_total_is_correct(result) -> None:
     assert result["total"] == 40
 
 
 def test_accuracy_is_perfect(result) -> None:
-    # The extractor recovers every synthetic circuit; pin it exactly so a drop
-    # (e.g. 40 -> 38) fails loudly instead of hiding under a loose >=0.95 gate.
     assert result["correct"] == 40, f"regressed; failures: {result['failures']}"
     assert result["accuracy"] == 1.0
 
 
-# --- bookkeeping consistency -------------------------------------------------
 
 def test_correct_matches_template_sum(result) -> None:
     assert result["correct"] == sum(c for c, _ in result["by_template"].values())
@@ -53,11 +48,9 @@ def test_by_component_count_total_sums_to_count(result) -> None:
 
 
 def test_difficulty_breakdown_spans_multiple_sizes(result) -> None:
-    # The "accuracy by component count" cut is only meaningful if it has >1 bucket.
     assert len(result["by_component_count"]) > 1
 
 
-# --- determinism -------------------------------------------------------------
 
 def test_determinism(result) -> None:
     again = evaluate_extraction(count=40, seed=0)

@@ -58,9 +58,9 @@ class NonlinearError(Exception):
 class DiodeModel:
     """Shockley diode parameters. Defaults model a small silicon diode (~0.65 V)."""
 
-    I_s: float = 1e-14        # saturation current (A)
-    n: float = 1.0            # ideality factor
-    V_t: float = 0.025852     # thermal voltage at ~300 K (V)
+    I_s: float = 1e-14
+    n: float = 1.0
+    V_t: float = 0.025852
 
     @property
     def vte(self) -> float:
@@ -76,7 +76,6 @@ class DiodeModel:
         return (self.I_s / self.vte) * math.exp(min(v / self.vte, 80.0))
 
 
-# A light-emitting diode turns on much higher (~1.8 V): smaller I_s, larger n.
 LED = DiodeModel(I_s=1e-17, n=2.0)
 SILICON = DiodeModel()
 
@@ -94,7 +93,7 @@ def _linearized_netlist(netlist: Netlist, vd: dict[str, float],
             model = models[c.name]
             v0 = vd[c.name]
             g = model.conductance(v0)
-            i_eq = model.current(v0) - g * v0          # offset so the line passes through (v0, I0)
+            i_eq = model.current(v0) - g * v0
             nl.add("R", f"{c.name}__Rd", 1.0 / g, c.nodes[0], c.nodes[1])
             nl.add("I", f"{c.name}__Id", i_eq, c.nodes[0], c.nodes[1])
         else:
@@ -119,13 +118,12 @@ def solve_nonlinear(
     """
     diodes = [c for c in netlist.components if c.kind == "D"]
     if not diodes:
-        return solve(netlist)                          # nothing non-linear: one linear solve
+        return solve(netlist)
 
     models = dict(models or {})
     for d in diodes:
         models.setdefault(d.name, default_model)
 
-    # Start every diode at a modest forward guess; limiting handles the rest.
     vd = {d.name: 0.6 for d in diodes}
 
     last: SolveResult | None = None
@@ -134,8 +132,6 @@ def solve_nonlinear(
         new_vd = {d.name: last.node_voltages[d.nodes[0]] - last.node_voltages[d.nodes[1]]
                   for d in diodes}
 
-        # Voltage limiting: cap how far any diode voltage may *rise* per step, the
-        # only direction the exponential can run away in.
         moved = 0.0
         for name in vd:
             step = new_vd[name] - vd[name]
@@ -152,7 +148,6 @@ def solve_nonlinear(
             f"(last voltage move {moved:.2e} V > tol {tol:g})"
         )
 
-    # Fold the final diode currents into the result's branch currents.
     for d in diodes:
         last.branch_currents[d.name] = models[d.name].current(vd[d.name])
     return last
@@ -163,7 +158,7 @@ def _demo() -> int:
     n = Netlist()
     n.add("V", "V1", "5", "in", "0")
     n.add("R", "R1", "1k", "in", "mid")
-    n.add("D", "D1", 0.0, "mid", "0")                  # anode at 'mid', cathode at ground
+    n.add("D", "D1", 0.0, "mid", "0")
     r = solve_nonlinear(n)
     vd = r.voltage("mid") - r.voltage("0")
     print("Silicon diode + 1k from 5V:")

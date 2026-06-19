@@ -36,9 +36,6 @@ from networkx.algorithms import isomorphism
 from solver.netlist import GROUND, Netlist
 
 
-# ---------------------------------------------------------------------------
-# Public helpers
-# ---------------------------------------------------------------------------
 
 def to_circuit_graph(net: Netlist) -> nx.MultiGraph:
     """Convert a Netlist to a NetworkX MultiGraph suitable for isomorphism tests.
@@ -50,13 +47,11 @@ def to_circuit_graph(net: Netlist) -> nx.MultiGraph:
     """
     G: nx.MultiGraph = nx.MultiGraph()
 
-    # Collect all node names first so isolated nodes still appear.
     all_nodes = {n for c in net.components for n in c.nodes}
     for name in all_nodes:
         G.add_node(name, is_ground=(name == GROUND))
 
     for comp in net.components:
-        # The edge represents the component; kind is the only info we keep.
         G.add_edge(comp.nodes[0], comp.nodes[1], kind=comp.kind)
 
     return G
@@ -86,12 +81,8 @@ def circuit_equivalent(net_a: Netlist, net_b: Netlist) -> bool:
     Ga = to_circuit_graph(net_a)
     Gb = to_circuit_graph(net_b)
 
-    # node_match: both endpoints' is_ground flag must agree.
     node_match = isomorphism.categorical_node_match("is_ground", False)
 
-    # edge_match: every edge (component) must match by kind.
-    # categorical_multiedge_match handles multigraphs where two nodes can be
-    # connected by more than one component (e.g. two resistors in parallel).
     edge_match = isomorphism.categorical_multiedge_match("kind", None)
 
     matcher = isomorphism.GraphMatcher(Ga, Gb,

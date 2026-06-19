@@ -36,8 +36,6 @@ from solver.equivalence import circuit_equivalent
 from solver.netlist import Netlist
 from vision.wire_extraction import extract_netlist
 
-# Seeds to test.  20 samples gives good coverage of both templates
-# (series_divider and parallel_bank) across different resistor counts.
 _SEEDS = list(range(20))
 
 
@@ -46,8 +44,6 @@ def _run_one(seed: int) -> bool:
     rng = random.Random(seed)
     pil_image, ground_truth = generate_one(rng)
 
-    # Run extraction — we pass the ground-truth bounding boxes as-is (this is
-    # the oracle mode; later phases will use the YOLO detector instead).
     extracted = extract_netlist(
         np.asarray(pil_image),
         ground_truth["components"],
@@ -57,9 +53,6 @@ def _run_one(seed: int) -> bool:
     return circuit_equivalent(extracted, truth)
 
 
-# ---------------------------------------------------------------------------
-# Parameterised per-seed test
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("seed", _SEEDS)
 def test_extraction_seed(seed: int) -> None:
@@ -71,9 +64,6 @@ def test_extraction_seed(seed: int) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Summary test — reports the pass rate across all seeds
-# ---------------------------------------------------------------------------
 
 def test_pass_rate() -> None:
     """All 20 seeds must pass; the test prints the exact rate for the report."""
@@ -86,9 +76,6 @@ def test_pass_rate() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Smoke test — check that debug=True works
-# ---------------------------------------------------------------------------
 
 def test_debug_mode_returns_info() -> None:
     """When debug=True, extract_netlist returns (Netlist, dict)."""

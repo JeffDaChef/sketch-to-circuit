@@ -42,7 +42,7 @@ class TestBasicShapes:
     def test_straight_line(self):
         """A horizontal 9-px line: 2 endpoints, 1 edge, no branches."""
         m = blank()
-        m[5, 2:11] = True                    # y=5, x=2..10
+        m[5, 2:11] = True
         g = build_skeleton_graph(m, prune_len=0)
 
         assert kinds(g) == {"endpoint": 2}
@@ -52,18 +52,17 @@ class TestBasicShapes:
         pos = sorted(endpoint_positions(g).values())
         assert pos == [(2, 5), (10, 5)]
 
-        # The edge's interior path is the 7 pixels strictly between the ends.
         (_, _, data), = g.edges(data=True)
         assert data["length"] == 7
 
     def test_l_bend_is_one_clean_path(self):
         """An L: corner pixels must NOT create phantom branch nodes."""
         m = blank()
-        m[5, 2:7] = True                     # horizontal arm: (2..6, 5)
-        m[5:10, 6] = True                    # vertical arm:   (6, 5..9)
+        m[5, 2:7] = True
+        m[5:10, 6] = True
         g = build_skeleton_graph(m, prune_len=0)
 
-        assert kinds(g) == {"endpoint": 2}   # no 'branch' key at all
+        assert kinds(g) == {"endpoint": 2}
         assert g.number_of_edges() == 1
         assert n_components(g) == 1
         pos = sorted(endpoint_positions(g).values())
@@ -73,7 +72,7 @@ class TestBasicShapes:
         """A 45-degree line is a single path with 2 endpoints."""
         m = blank()
         for i in range(2, 9):
-            m[i, i] = True                   # (x=i, y=i), i = 2..8
+            m[i, i] = True
         g = build_skeleton_graph(m, prune_len=0)
 
         assert kinds(g) == {"endpoint": 2}
@@ -84,8 +83,8 @@ class TestBasicShapes:
     def test_t_junction(self):
         """A T: 3 endpoints, exactly 1 branch node, 3 edges."""
         m = blank()
-        m[8, 2:15] = True                    # horizontal bar: (2..14, 8)
-        m[2:9, 8] = True                     # vertical stem:  (8, 2..8)
+        m[8, 2:15] = True
+        m[2:9, 8] = True
         g = build_skeleton_graph(m, prune_len=0)
 
         assert kinds(g) == {"endpoint": 3, "branch": 1}
@@ -95,8 +94,8 @@ class TestBasicShapes:
     def test_plus_junction(self):
         """A +: 4 endpoints, 1 branch node, 4 edges."""
         m = blank()
-        m[8, 2:15] = True                    # horizontal: (2..14, 8)
-        m[2:15, 8] = True                    # vertical:   (8, 2..14)
+        m[8, 2:15] = True
+        m[2:15, 8] = True
         g = build_skeleton_graph(m, prune_len=0)
 
         assert kinds(g) == {"endpoint": 4, "branch": 1}
@@ -120,10 +119,10 @@ class TestComponentsAndLoops:
         """A closed rectangle has no endpoints/branches but must not vanish:
         it gets a LOOP node so connectivity queries still see it."""
         m = blank()
-        m[4, 4:13] = True                    # top
-        m[10, 4:13] = True                   # bottom
-        m[4:11, 4] = True                    # left
-        m[4:11, 12] = True                   # right
+        m[4, 4:13] = True
+        m[10, 4:13] = True
+        m[4:11, 4] = True
+        m[4:11, 12] = True
         g = build_skeleton_graph(m, prune_len=0)
 
         assert g.number_of_nodes() >= 1
@@ -135,29 +134,26 @@ class TestPruning:
     def make_whiskered_line(self):
         """A long line with a 3-px whisker hanging off its middle."""
         m = blank()
-        m[8, 2:17] = True                    # main line: (2..16, 8)
-        m[5:8, 9] = True                     # whisker:   (9, 5..7), 3 px
+        m[8, 2:17] = True
+        m[5:8, 9] = True
         return m
 
     def test_no_pruning_keeps_whisker(self):
         g = build_skeleton_graph(self.make_whiskered_line(), prune_len=0)
-        # Whisker tip is a third endpoint and the meeting point is a branch.
         assert kinds(g)["endpoint"] == 3
         assert kinds(g).get("branch", 0) == 1
 
     def test_pruning_removes_whisker_only(self):
         g = build_skeleton_graph(self.make_whiskered_line(), prune_len=4)
-        # Whisker (3 px <= 4) gone; the two real line ends survive.
         pos = sorted(endpoint_positions(g).values())
         assert pos == [(2, 8), (16, 8)]
-        # Still one connected structure — pruning must not split the line.
         assert n_components(g) == 1
 
     def test_pruning_never_deletes_a_standalone_short_wire(self):
         """A short isolated segment is a real wire, not a whisker — pruning
         only removes spurs that hang off a larger structure."""
         m = blank()
-        m[5, 6:10] = True                    # 4-px standalone wire
+        m[5, 6:10] = True
         g = build_skeleton_graph(m, prune_len=4)
         assert kinds(g) == {"endpoint": 2}
         assert g.number_of_edges() == 1

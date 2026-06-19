@@ -16,8 +16,6 @@ import math
 import re
 from dataclasses import dataclass, field
 
-# Component kinds supported by the data model. The DC solver (mna.py) handles
-# R/V/I; C is an open circuit at DC; D is approximated later (fixed LED drop).
 KINDS = {
     "R": "resistor",
     "C": "capacitor",
@@ -34,11 +32,7 @@ class NetlistError(Exception):
     """Raised for malformed netlists or unparseable values."""
 
 
-# --- value parsing -----------------------------------------------------------
 
-# Engineering-notation multipliers. Case matters only for m (milli) vs M (mega):
-# SPICE itself uses "MEG" for mega, but handwritten "1M" on a resistor almost
-# always means megaohm, so we accept both M and MEG as 1e6.
 _MULTIPLIERS = {
     "T": 1e12,
     "G": 1e9,
@@ -70,18 +64,11 @@ def parse_value(text: str) -> float:
     if not token:
         raise NetlistError("empty value")
 
-    # Strip a trailing unit (V, A, F, ohm...) -- it names the quantity, not the size.
-    # Only strip a single letter if there's still a digit or multiplier before it,
-    # so we don't wreck pure numbers.
     stripped = _UNIT_SUFFIX.sub("", token)
     if stripped and (stripped[-1].isdigit() or stripped[-1] in _MULTIPLIERS or
                      stripped[-3:].upper() == "MEG"):
         token = stripped
 
-    # Plain Python numbers first: this covers integers, decimals, a leading sign,
-    # and scientific notation ('1e6', '-2.2e-3') — exactly what to_spice() emits
-    # with %g, so to_spice -> from_spice round-trips. (NaN/inf parse here too but
-    # are rejected later by Component, which requires finite values.)
     try:
         return float(token)
     except ValueError:
@@ -103,7 +90,6 @@ def parse_value(text: str) -> float:
     raise NetlistError(f"can't parse component value: {text!r}")
 
 
-# --- the data structures -----------------------------------------------------
 
 
 @dataclass
@@ -115,9 +101,9 @@ class Component:
     source into nodes[1] (i.e. it pushes current INTO the circuit at nodes[1]).
     """
 
-    kind: str       # one of KINDS: 'R', 'C', 'V', 'I', 'D'
-    name: str       # e.g. 'R1' -- unique within a netlist
-    value: float    # ohms, farads, volts, or amps depending on kind
+    kind: str
+    name: str
+    value: float
     nodes: tuple[str, str]
 
     def __post_init__(self):
@@ -125,13 +111,8 @@ class Component:
             raise NetlistError(f"unknown component kind {self.kind!r} for {self.name}")
         if len(self.nodes) != 2:
             raise NetlistError(f"{self.name}: components have exactly 2 nodes")
-        # A value must be a real, finite number (NaN/inf would poison the matrix).
         if not math.isfinite(self.value):
             raise NetlistError(f"{self.name}: value must be finite, got {self.value!r}")
-        # Passive parts (R/C/L) must be strictly positive: a zero resistance is a
-        # short (model it as a merged node) and would divide-by-zero in the solver;
-        # negatives are unphysical. Sources (V/I) and the diode placeholder may be
-        # any finite value (a -5 V rail is legitimate).
         if self.kind in ("R", "C", "L") and self.value <= 0:
             raise NetlistError(
                 f"{self.name}: {KINDS[self.kind]} value must be positive, got {self.value!r} "
@@ -164,7 +145,6 @@ class Netlist:
     def has_ground(self) -> bool:
         return any(GROUND in c.nodes for c in self.components)
 
-    # --- SPICE text format ---
 
     def to_spice(self, title: str = "sketch-to-circuit netlist") -> str:
         """Emit standard SPICE netlist text (title line, components, .end)."""

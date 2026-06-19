@@ -46,24 +46,19 @@ from pathlib import Path
 from solver.mna import SolveResult, solve
 from solver.netlist import GROUND, Netlist
 
-# Components ngspice can compare against our linear DC solver. A circuit using
-# anything else (diodes especially) is outside what mna.py can solve, so we
-# refuse it rather than silently produce a meaningless comparison.
-_SUPPORTED_KINDS = {"R", "V", "I", "C"}  # C is allowed (open at DC) but ignored by both
+_SUPPORTED_KINDS = {"R", "V", "I", "C"}
 
 
 class NgspiceError(Exception):
     """Raised when ngspice is missing, errors out, or returns unparseable output."""
 
 
-# --- discovering ngspice -----------------------------------------------------
 
 def ngspice_available() -> bool:
     """True if an `ngspice` executable is on PATH (so the live run can happen)."""
     return shutil.which("ngspice") is not None
 
 
-# --- step 1: build the SPICE deck -------------------------------------------
 
 def build_deck(netlist: Netlist, title: str = "sketch-to-circuit validation") -> str:
     """Write the SPICE text we hand to ngspice for a DC operating-point check.
@@ -87,12 +82,11 @@ def build_deck(netlist: Netlist, title: str = "sketch-to-circuit validation") ->
 
     lines = [f"* {title}"]
     for c in netlist.components:
-        # Same one-line-per-part format as Netlist.to_spice(): name n+ n- value.
         lines.append(f"{c.name} {c.nodes[0]} {c.nodes[1]} {c.value:.10g}")
 
     lines.append(".control")
     lines.append("op")
-    for node in netlist.node_names():          # non-ground nodes only; V(0) is 0 by definition
+    for node in netlist.node_names():
         lines.append(f"print v({node})")
     for c in netlist.components:
         if c.kind == "V":
@@ -102,7 +96,6 @@ def build_deck(netlist: Netlist, title: str = "sketch-to-circuit validation") ->
     return "\n".join(lines) + "\n"
 
 
-# --- step 2: run ngspice -----------------------------------------------------
 
 def run_ngspice(deck: str, timeout: float = 30.0) -> str:
     """Run `ngspice -b` on a deck and return its raw stdout text.
@@ -132,11 +125,8 @@ def run_ngspice(deck: str, timeout: float = 30.0) -> str:
     return proc.stdout
 
 
-# --- step 3: parse ngspice's output ------------------------------------------
 
-# A number in ngspice output: optional sign, digits/decimal, optional exponent.
 _NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-# A printed result line: "<lhs> = <number>", ignoring surrounding noise/units.
 _RESULT_LINE = re.compile(rf"^\s*(\S+)\s*=\s*({_NUMBER})\b")
 
 
@@ -148,7 +138,6 @@ def parse_ngspice_output(text: str, netlist: Netlist) -> tuple[dict[str, float],
     map back. Lines that aren't ``name = number`` (banners, timing, warnings) are
     ignored, which is what lets this survive ngspice's chatty output.
     """
-    # Look-up tables from a normalized (lowercased) name back to our exact name.
     node_lookup = {n.lower(): n for n in netlist.node_names()}
     vsrc_lookup = {c.name.lower(): c.name for c in netlist.components if c.kind == "V"}
 
@@ -166,7 +155,6 @@ def parse_ngspice_output(text: str, netlist: Netlist) -> tuple[dict[str, float],
             voltages[node_lookup[v_match.group(1)]] = num
             continue
 
-        # Source current can appear as "i(v1)" or as the raw branch vector "v1#branch".
         i_match = re.fullmatch(r"i\((.+)\)", lhs)
         branch_match = re.fullmatch(r"(.+)#branch", lhs)
         src = (i_match.group(1) if i_match else
@@ -177,7 +165,6 @@ def parse_ngspice_output(text: str, netlist: Netlist) -> tuple[dict[str, float],
     return voltages, currents
 
 
-# --- step 4: compare ----------------------------------------------------------
 
 @dataclass
 class ComparisonReport:
@@ -185,8 +172,8 @@ class ComparisonReport:
 
     title: str
     agrees: bool
-    voltage_errors: dict[str, float] = field(default_factory=dict)   # node -> |ours - ngspice|
-    current_errors: dict[str, float] = field(default_factory=dict)   # source -> |ours - ngspice|
+    voltage_errors: dict[str, float] = field(default_factory=dict)
+    current_errors: dict[str, float] = field(default_factory=dict)
     max_voltage_error: float = 0.0
     max_current_error: float = 0.0
     ours: SolveResult | None = None
@@ -265,7 +252,6 @@ def validate_suite(cases: list[tuple[str, Netlist]], runner=run_ngspice) -> list
     return [compare(net, title, runner=runner) for title, net in cases]
 
 
-# --- a small built-in suite + CLI --------------------------------------------
 
 def default_suite() -> list[tuple[str, Netlist]]:
     """A handful of hand-checkable circuits to validate against ngspice.

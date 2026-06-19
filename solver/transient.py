@@ -67,10 +67,10 @@ class TransientError(Exception):
 class TransientResult:
     """The time-domain answer: a time axis plus a voltage curve per node/cap."""
 
-    times: list[float]                                  # seconds, length = #samples
-    node_voltages: dict[str, list[float]]               # node name -> voltage at each time
-    capacitor_voltages: dict[str, list[float]]          # cap name -> voltage across it
-    inductor_currents: dict[str, list[float]] = field(default_factory=dict)  # ind name -> current
+    times: list[float]
+    node_voltages: dict[str, list[float]]
+    capacitor_voltages: dict[str, list[float]]
+    inductor_currents: dict[str, list[float]] = field(default_factory=dict)
 
     def series(self, node: str) -> list[float]:
         """The full voltage-vs-time series for one node."""
@@ -88,7 +88,6 @@ class TransientResult:
         return "\n".join(lines)
 
 
-# --- time-varying source helpers ---------------------------------------------
 
 def sine(amplitude: float, freq_hz: float, offset: float = 0.0, phase: float = 0.0) -> Callable[[float], float]:
     """A sine waveform v(t) = offset + amplitude·sin(2π·freq·t + phase), for `sources`."""
@@ -96,7 +95,6 @@ def sine(amplitude: float, freq_hz: float, offset: float = 0.0, phase: float = 0
     return lambda t: offset + amplitude * math.sin(w * t + phase)
 
 
-# --- building the per-step circuits (the companion-model machinery) ----------
 
 _METHODS = ("backward-euler", "trapezoidal")
 
@@ -128,7 +126,7 @@ def _companion(kind: str, value: float, v_prev: float, i_prev: float,
     if kind == "C":
         g = value / dt if method == "backward-euler" else 2.0 * value / dt
         i_src = -g * v_prev - (0.0 if method == "backward-euler" else i_prev)
-    else:  # inductor
+    else:
         g = dt / value if method == "backward-euler" else dt / (2.0 * value)
         i_src = i_prev + (0.0 if method == "backward-euler" else g * v_prev)
     return g, i_src
@@ -175,7 +173,6 @@ def _step_netlist(netlist: Netlist, v_prev: dict[str, float], i_prev: dict[str, 
     return nl, companions
 
 
-# --- the time-stepping loop --------------------------------------------------
 
 def solve_transient(
     netlist: Netlist,
@@ -223,7 +220,6 @@ def solve_transient(
         if name not in source_names:
             raise TransientError(f"time-varying value for unknown source {name!r}")
 
-    # Diodes present -> each step is a Newton-Raphson solve; else a plain linear one.
     has_diodes = any(c.kind == "D" for c in netlist.components)
     def step_solve(nl: Netlist):
         return solve_nonlinear(nl, models=models) if has_diodes else solve(nl)
@@ -231,14 +227,9 @@ def solve_transient(
     def overrides(t: float) -> dict[str, float]:
         return {name: fn(t) for name, fn in sources.items()}
 
-    # Per-element state: voltage across it and current through it. We track BOTH for
-    # every reactive element (trapezoidal needs both); the unused one is seeded to 0
-    # and corrected after the first (backward-Euler) step.
     v_prev = {c.name: (cap_ic.get(c.name, 0.0) if c.kind == "C" else 0.0) for c in reactive}
     i_prev = {c.name: (ind_ic.get(c.name, 0.0) if c.kind == "L" else 0.0) for c in reactive}
 
-    # t = 0 snapshot: solve with caps pinned to their initial voltages and inductors
-    # to their initial currents.
     ic = step_solve(_ic_netlist(netlist, cap_ic, ind_ic, overrides(0.0)))
 
     times = [0.0]
@@ -246,11 +237,6 @@ def solve_transient(
     capacitor_voltages: dict[str, list[float]] = {c.name: [v_prev[c.name]] for c in caps}
     inductor_currents: dict[str, list[float]] = {c.name: [i_prev[c.name]] for c in inds}
 
-    # Plan the step sizes. Uniform dt, but if dt doesn't divide t_stop evenly we
-    # add ONE shorter final step so the last sample lands exactly on t_stop —
-    # otherwise the run silently stops short (e.g. t_stop=1, dt=0.3 -> 0.9) and
-    # final() would report the wrong "settled" value. (Companion models take the
-    # step size per call, so a variable last step is fine.)
     n_round = int(round(t_stop / dt))
     if abs(n_round * dt - t_stop) <= 1e-9 * max(t_stop, dt):
         step_sizes = [dt] * n_round
@@ -261,12 +247,9 @@ def solve_transient(
     t = 0.0
     for step_idx, h in enumerate(step_sizes):
         t += h
-        # The very first step runs backward-Euler regardless: trapezoidal needs a
-        # consistent previous current/voltage, which we only have after one step.
         method_used = "backward-euler" if step_idx == 0 else method
         nl, companions = _step_netlist(netlist, v_prev, i_prev, h, method_used, overrides(t))
         sol = step_solve(nl)
-        # Recover each reactive element's new voltage and current, then record.
         for name, g, i_src, a, b in companions:
             v_new = sol.node_voltages[a] - sol.node_voltages[b]
             v_prev[name] = v_new
@@ -282,12 +265,11 @@ def solve_transient(
     return TransientResult(times, node_voltages, capacitor_voltages, inductor_currents)
 
 
-# --- a plotting helper + demos -----------------------------------------------
 
 def save_plot(result: TransientResult, nodes: list[str], path: str, title: str = "Transient response") -> None:
     """Save a voltage-vs-time PNG for the given nodes (the demo artifact)."""
     import matplotlib
-    matplotlib.use("Agg")                               # headless: no display needed
+    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -303,7 +285,7 @@ def _rc_demo() -> None:
     n = Netlist()
     n.add("V", "V1", "5", "in", "0")
     n.add("R", "R1", "1k", "in", "mid")
-    n.add("C", "C1", 1e-3, "mid", "0")                  # τ = R·C = 1000 · 1e-3 = 1 s
+    n.add("C", "C1", 1e-3, "mid", "0")
     result = solve_transient(n, t_stop=5.0, dt=0.01)
     tau_idx = min(range(len(result.times)), key=lambda i: abs(result.times[i] - 1.0))
     print("RC charging (τ = 1 s):")
@@ -321,17 +303,17 @@ def _rectifier_demo() -> None:
     'transient + non-linear diode' circuit, impossible before this lever.
     """
     n = Netlist()
-    n.add("V", "V1", 0.0, "ac", "0")                    # value overridden by the sine below
-    n.add("D", "D1", 0.0, "ac", "out")                  # anode 'ac', cathode 'out'
-    n.add("C", "C1", 100e-6, "out", "0")                # smoothing cap, RC = 0.1 s >> 1/60 s
-    n.add("R", "R1", "1k", "out", "0")                  # load
+    n.add("V", "V1", 0.0, "ac", "0")
+    n.add("D", "D1", 0.0, "ac", "out")
+    n.add("C", "C1", 100e-6, "out", "0")
+    n.add("R", "R1", "1k", "out", "0")
     period = 1.0 / 60.0
     result = solve_transient(
         n, t_stop=5 * period, dt=period / 200,
         sources={"V1": sine(amplitude=5.0, freq_hz=60.0)},
     )
     out = result.series("out")
-    settled = out[len(out) // 2:]                       # ignore initial charge-up transient
+    settled = out[len(out) // 2:]
     ripple = max(settled) - min(settled)
     print("\nHalf-wave rectifier (5 V, 60 Hz, 100 µF, 1 kΩ):")
     print(f"  peak output : {max(out):.3f} V  (≈ 5 V − one diode drop)")
@@ -355,7 +337,7 @@ def _rlc_demo() -> None:
         n.add("V", "V1", "5", "in", "0")
         n.add("R", "R1", "200", "in", "a")
         n.add("L", "L1", 1.0, "a", "b")
-        n.add("C", "C1", 1e-6, "b", "0")                # ω₀=1/√(LC)=1000 rad/s, underdamped (R<2√(L/C))
+        n.add("C", "C1", 1e-6, "b", "0")
         return n
 
     be = solve_transient(build(), t_stop=0.05, dt=2e-5, method="backward-euler")

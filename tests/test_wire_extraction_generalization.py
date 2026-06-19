@@ -24,7 +24,7 @@ from solver.equivalence import circuit_equivalent
 from vision.wire_extraction import extract_netlist
 
 N_SEEDS = 30
-MIN_PASSES = 28          # allow a sliver of geometric bad luck, no more
+MIN_PASSES = 28
 
 
 LAYOUTS = {

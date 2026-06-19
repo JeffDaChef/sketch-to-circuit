@@ -14,9 +14,9 @@ class TestParseValue:
     def test_engineering_suffixes(self):
         assert parse_value("10k") == 10_000
         assert parse_value("10K") == 10_000
-        assert parse_value("1M") == 1_000_000      # handwritten M = mega
-        assert parse_value("1MEG") == 1_000_000    # SPICE-style mega
-        assert parse_value("5m") == pytest.approx(5e-3)   # lowercase m = milli
+        assert parse_value("1M") == 1_000_000
+        assert parse_value("1MEG") == 1_000_000
+        assert parse_value("5m") == pytest.approx(5e-3)
         assert parse_value("100n") == pytest.approx(100e-9)
         assert parse_value("4.7u") == pytest.approx(4.7e-6)
         assert parse_value("22p") == pytest.approx(22e-12)
@@ -36,8 +36,6 @@ class TestParseValue:
         assert parse_value("1M5") == 1_500_000
 
     def test_scientific_notation_and_signs(self):
-        # to_spice() emits %g (e.g. '1e+06'); these must parse back so the
-        # round-trip works, and negative source values must be expressible.
         assert parse_value("1e6") == 1_000_000
         assert parse_value("1e+06") == 1_000_000
         assert parse_value("2.2e3") == 2200
@@ -62,7 +60,7 @@ class TestNetlist:
 
     def test_add_and_node_names(self):
         n = self.make_divider()
-        assert n.node_names() == ["in", "mid"]   # ground excluded
+        assert n.node_names() == ["in", "mid"]
         assert n.has_ground()
 
     def test_string_values_are_parsed(self):
@@ -80,7 +78,6 @@ class TestNetlist:
             Netlist().add("X", "X1", 1, "a", "b")
 
     def test_nonpositive_passive_values_rejected(self):
-        # Zero/negative R, C, L are unphysical and would divide-by-zero in the solver.
         for kind in ("R", "C", "L"):
             with pytest.raises(NetlistError, match="positive"):
                 Netlist().add(kind, f"{kind}1", 0, "a", "b")
@@ -88,7 +85,6 @@ class TestNetlist:
                 Netlist().add(kind, f"{kind}2", -1, "a", "b")
 
     def test_sources_may_be_zero_or_negative(self):
-        # A -5 V rail or a 0 A source is legitimate; only finiteness is required.
         Netlist().add("V", "V1", -5, "a", "0")
         Netlist().add("I", "I1", 0, "a", "0")
 
@@ -99,10 +95,9 @@ class TestNetlist:
             Netlist().add("R", "R1", float("nan"), "a", "b")
 
     def test_megohm_and_nanofarad_round_trip(self):
-        # The historical break: %g writes these in scientific notation.
         n = Netlist()
-        n.add("R", "R1", 1e6, "a", "b")       # 1 MΩ -> "1e+06"
-        n.add("C", "C1", 100e-9, "b", "0")    # 100 nF -> "1e-07"
+        n.add("R", "R1", 1e6, "a", "b")
+        n.add("C", "C1", 100e-9, "b", "0")
         again = Netlist.from_spice(n.to_spice())
         assert again.components[0].value == pytest.approx(1e6)
         assert again.components[1].value == pytest.approx(100e-9)

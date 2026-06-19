@@ -50,8 +50,8 @@ class ACResult:
     """The phasor solution at ONE frequency: complex voltage at every node."""
 
     freq: float
-    node_voltages: dict[str, complex]      # net name -> complex phasor (volts)
-    source_currents: dict[str, complex]    # voltage-source name -> complex phasor (amps)
+    node_voltages: dict[str, complex]
+    source_currents: dict[str, complex]
 
     def gain(self, node: str) -> complex:
         """Complex phasor at `node` (its amplitude is |.|, phase is its angle)."""
@@ -85,8 +85,6 @@ def solve_ac(netlist: Netlist, freq: float) -> ACResult:
     A = np.zeros((size, size), dtype=complex)
     z = np.zeros(size, dtype=complex)
 
-    # R, C and L all stamp identically — as a complex admittance Y between their
-    # two nodes (this is the whole elegance of the phasor view).
     for c in netlist.components:
         if c.kind == "R":
             y = 1.0 / c.value
@@ -95,13 +93,13 @@ def solve_ac(netlist: Netlist, freq: float) -> ACResult:
         elif c.kind == "L":
             y = 1.0 / (1j * w * c.value)
         elif c.kind == "I":
-            a, b = c.nodes                          # current-source phasor -> RHS
+            a, b = c.nodes
             if a != GROUND:
                 z[node_index[a]] -= c.value
             if b != GROUND:
                 z[node_index[b]] += c.value
             continue
-        else:                                        # V handled below; D already rejected
+        else:
             continue
         a, b = c.nodes
         if a != GROUND:
@@ -112,7 +110,6 @@ def solve_ac(netlist: Netlist, freq: float) -> ACResult:
             A[node_index[a], node_index[b]] -= y
             A[node_index[b], node_index[a]] -= y
 
-    # Voltage sources: the same +1/-1 augmentation as DC MNA (the "modified" part).
     for c in vsources:
         s = vsource_index[c.name]
         p, q = c.nodes
@@ -137,7 +134,6 @@ def solve_ac(netlist: Netlist, freq: float) -> ACResult:
     return ACResult(freq, node_voltages, source_currents)
 
 
-# --- frequency sweep + transfer function -------------------------------------
 
 def logspace(f_start: float, f_stop: float, points_per_decade: int = 20) -> list[float]:
     """Frequencies spread evenly on a log axis (the natural axis for Bode plots)."""
@@ -175,7 +171,6 @@ def transfer_function(netlist: Netlist, freqs, output_node: str, input_source: s
     }
 
 
-# --- small-signal AC (diodes linearised at the DC operating point) -----------
 
 def _diode_resistances(netlist: Netlist, models, default_model: DiodeModel):
     """Solve the DC operating point and return {diode_name: small-signal r_d}.
@@ -247,12 +242,12 @@ def small_signal_transfer_function(netlist: Netlist, freqs, output_node: str,
         elif c.kind == "V":
             ac_net.add("V", c.name, 1.0 if c.name == input_source else 0.0, c.nodes[0], c.nodes[1])
         elif c.kind == "I":
-            ac_net.add("I", c.name, 0.0, c.nodes[0], c.nodes[1])     # DC current source -> AC open
+            ac_net.add("I", c.name, 0.0, c.nodes[0], c.nodes[1])
         else:
             ac_net.add(c.kind, c.name, c.value, c.nodes[0], c.nodes[1])
 
     freq_list = list(freqs)
-    H = [solve_ac(ac_net, f).node_voltages[output_node] for f in freq_list]   # V_in = 1
+    H = [solve_ac(ac_net, f).node_voltages[output_node] for f in freq_list]
     mag = [abs(h) for h in H]
     return {
         "freq": freq_list,
@@ -281,7 +276,6 @@ def save_bode_plot(sweep: dict, path: str, title: str = "Bode plot") -> None:
 
 def _demo() -> int:
     """RC low-pass + series-RLC band-pass, checked against their textbook formulas."""
-    # RC low-pass: cutoff f_c = 1/(2πRC); at f_c, |H| = 1/√2 (−3 dB), phase −45°.
     R, C = 1000.0, 1e-6
     fc = 1.0 / (2 * math.pi * R * C)
     lp = Netlist()
@@ -294,7 +288,6 @@ def _demo() -> int:
                    "bode_lowpass.png", title=f"RC low-pass (f_c ≈ {fc:.0f} Hz)")
     print("  saved bode_lowpass.png")
 
-    # Series RLC band-pass (output across R): peaks at f_0 = 1/(2π√(LC)), |H|=1 there.
     L, C2 = 10e-3, 1e-6
     f0 = 1.0 / (2 * math.pi * math.sqrt(L * C2))
     bp = Netlist()
@@ -309,9 +302,6 @@ def _demo() -> int:
                    "bode_bandpass.png", title=f"Series-RLC band-pass (f_0 ≈ {f0:.0f} Hz)")
     print("  saved bode_bandpass.png")
 
-    # Small-signal: a diode is a BIAS-TUNABLE resistor (r_d = n·V_t/I_D), so a
-    # diode + capacitor is a low-pass whose cutoff you set with a DC bias current.
-    # vin (AC) -> D1 -> mid -> C -> 0 ; I_bias (mid->0) sets the diode current.
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -319,10 +309,10 @@ def _demo() -> int:
     fig, ax = plt.subplots(figsize=(7, 4.5))
     for ibias in (1e-4, 1e-3):
         net = Netlist()
-        net.add("V", "vin", 0.0, "in", "0")      # pure AC input (no DC bias of its own)
+        net.add("V", "vin", 0.0, "in", "0")
         net.add("D", "D1", 0.0, "in", "mid")
         net.add("C", "C1", 1e-6, "mid", "0")
-        net.add("I", "Ibias", ibias, "mid", "0")  # DC bias current sets r_d
+        net.add("I", "Ibias", ibias, "mid", "0")
         vd, rd = operating_point(net)["D1"]
         fc = 1.0 / (2 * math.pi * rd * 1e-6)
         sweep = small_signal_transfer_function(net, logspace(10, 1e6), "mid", "vin")

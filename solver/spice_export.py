@@ -28,8 +28,6 @@ from __future__ import annotations
 from solver.netlist import GROUND, Netlist
 from solver.nonlinear import SILICON, DiodeModel
 
-# Engineering-notation suffixes, largest first. MEG (not M) is mega; m is milli —
-# this asymmetry is a SPICE rule, and our parse_value() round-trips all of these.
 _ENG_SUFFIXES = [
     (1e12, "T"), (1e9, "G"), (1e6, "MEG"), (1e3, "k"),
     (1.0, ""), (1e-3, "m"), (1e-6, "u"), (1e-9, "n"), (1e-12, "p"),
@@ -55,7 +53,6 @@ def _component_line(comp, diode_model_name: dict[str, str]) -> str:
     """One SPICE element line for a component."""
     a, b = comp.nodes
     if comp.kind == "D":
-        # SPICE diode: Dname anode cathode modelname (anode = nodes[0], per our convention).
         return f"{comp.name} {a} {b} {diode_model_name[comp.name]}"
     return f"{comp.name} {a} {b} {format_value(comp.value)}"
 
@@ -77,11 +74,9 @@ def export_spice(
     """
     models = dict(models or {})
 
-    # Assign each diode a model name, de-duplicating identical parameter sets so two
-    # plain silicon diodes share one `.model` line rather than emitting two.
     diode_model_name: dict[str, str] = {}
-    model_decls: dict[str, DiodeModel] = {}          # model name -> params (in emit order)
-    seen: dict[tuple[float, float], str] = {}        # (Is, N) -> model name
+    model_decls: dict[str, DiodeModel] = {}
+    seen: dict[tuple[float, float], str] = {}
     for comp in netlist.components:
         if comp.kind != "D":
             continue
@@ -102,7 +97,6 @@ def export_spice(
     lines.append(".end")
 
     if not netlist.has_ground():
-        # SPICE needs a node 0; warn loudly inside the file rather than fail silently.
         lines.insert(1, "* WARNING: no ground (node '0') — this deck will not simulate as-is")
     return "\n".join(lines) + "\n"
 

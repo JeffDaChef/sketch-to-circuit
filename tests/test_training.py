@@ -23,7 +23,6 @@ def _fake_results(map50, map50_95, names, ap_class_index, ap50):
 
 def test_per_class_scores_map_to_the_right_names():
     names = {0: "capacitor", 1: "diode", 2: "resistor"}
-    # All three classes present, in index order.
     res = _fake_results(0.8, 0.6, names, [0, 1, 2], [0.9, 0.7, 0.95])
     s = summarize_results(res)
     assert s["map50"] == pytest.approx(0.8)
@@ -35,13 +34,10 @@ def test_per_class_scores_map_to_the_right_names():
 
 
 def test_absent_class_does_not_misalign_scores():
-    # 'diode' (id 1) is ABSENT from the split: ap_class_index skips it, so the
-    # ap50 array has 2 entries for ids [0, 2]. The OLD code did ap50[global_id],
-    # so it would read ap50[2] (IndexError) for 'resistor' and mislabel the rest.
     names = {0: "capacitor", 1: "diode", 2: "resistor"}
     res = _fake_results(0.5, 0.4, names, [0, 2], [0.90, 0.80])
     s = summarize_results(res)
     assert s["per_class"] == {"capacitor": pytest.approx(0.90),
-                              "resistor": pytest.approx(0.80)}   # NOT shifted
+                              "resistor": pytest.approx(0.80)}
     assert "diode" not in s["per_class"]
     assert s["missing_classes"] == ["diode"]

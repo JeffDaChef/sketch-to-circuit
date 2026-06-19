@@ -4,7 +4,6 @@ A computer-vision system that turns a hand-drawn circuit schematic on paper into
 
 Technical paper and write-up: [docs/paper.md](docs/paper.md). Project website: https://jeffdachef.github.io/sketch-to-circuit/
 
-Full project spec: [`sketch_to_circuit_brief.md`](sketch_to_circuit_brief.md).
 Plain-English explanation of all the code: [`EXPLAINED.md`](EXPLAINED.md).
 Input drawing rules: [`docs/drawing_convention.md`](docs/drawing_convention.md).
 

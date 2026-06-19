@@ -2,8 +2,7 @@
 
 This file captures *why* we're building things in a certain order, the college-application
 strategy behind the project, and the "cool feature" ideas parked for later so they don't
-get lost. The authoritative build order is still `sketch_to_circuit_brief.md` §7; this file
-is the living layer on top of it.
+get lost.
 
 ---
 

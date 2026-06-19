@@ -35,7 +35,6 @@ from solver.equivalence import circuit_equivalent
 from vision.wire_extraction import extract_netlist as extract_new
 from vision.wire_extraction_baseline import extract_netlist as extract_old
 
-# Every layout has the signature maker(rng) -> (drawing, truth_netlist, boxed).
 LAYOUT_MAKERS = {
     "series_divider": _series_divider,
     "parallel_bank": _parallel_bank,
@@ -68,7 +67,7 @@ def run_ablation(n_seeds: int = 30, makers: dict | None = None) -> dict:
                     if circuit_equivalent(fn(image, comps), truth):
                         results[layout][name][0] += 1
                 except Exception:
-                    pass            # a crash is just a wrong answer for this comparison
+                    pass
     return results
 
 

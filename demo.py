@@ -30,7 +30,6 @@ def demo_handbuilt():
     n.add("R", "R2", "3k", "out", "0")
     result = solve(n)
     print(result)
-    # By hand: out = 12V * 3k/(1k+3k) = 9.0V. Confirm the solver agrees.
     print(f"\n   (hand-check: out should be 9.0V -> solver says {result.voltage('out'):.1f}V)")
 
 
@@ -46,7 +45,6 @@ def demo_generated():
     for line in ground_truth["netlist_spice"].splitlines():
         print(f"       {line}")
 
-    # Read that text back into a fresh netlist and solve it independently.
     netlist = Netlist.from_spice(ground_truth["netlist_spice"])
     result = solve(netlist)
 

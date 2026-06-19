@@ -58,7 +58,7 @@ def accuracy_at_size(template, k: int, n_seeds: int, seed0: int = 1000) -> tuple
             if circuit_equivalent(extract_netlist(image, comps), truth):
                 correct += 1
         except Exception:
-            pass            # a crash counts as a miss, not a study crash
+            pass
     return correct, n_seeds
 
 

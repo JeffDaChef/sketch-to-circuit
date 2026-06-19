@@ -30,9 +30,6 @@ import random
 import sys
 from pathlib import Path
 
-# When this script is run directly (not via pytest), Python only searches the
-# script's own folder.  Add the repo root to sys.path so that the solver,
-# vision, and data_collection packages can all be found.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
@@ -43,9 +40,6 @@ from solver.netlist import Netlist
 from vision.wire_extraction import extract_netlist
 
 
-# ---------------------------------------------------------------------------
-# Core evaluation function
-# ---------------------------------------------------------------------------
 
 def evaluate_extraction(count: int, seed: int = 0) -> dict:
     """Run the extraction pipeline on ``count`` synthetic circuits and score them.
@@ -73,55 +67,41 @@ def evaluate_extraction(count: int, seed: int = 0) -> dict:
     * ``"by_component_count"`` — dict[int, [correct, total]] per component count.
     * ``"failures"``   — list of up to 20 dicts describing failed circuits.
     """
-    # One RNG for the whole run; do NOT reseed per circuit.
     rng = random.Random(seed)
 
-    # Accumulators — filled as we iterate.
     total_correct = 0
-    by_template: dict[str, list[int]] = {}       # template_name -> [correct, total]
-    by_comp_count: dict[int, list[int]] = {}      # n_components -> [correct, total]
-    failures: list[dict] = []                    # info about wrong answers
+    by_template: dict[str, list[int]] = {}
+    by_comp_count: dict[int, list[int]] = {}
+    failures: list[dict] = []
 
     for i in range(count):
-        # --- generate a random circuit with known-correct ground truth -------
         img, gt = generate_one(rng)
 
         template_name: str = gt["template"]
 
-        # --- run the extractor using the ground-truth bounding boxes ---------
-        # (later phases will replace these boxes with YOLO detections)
         extracted: Netlist = extract_netlist(np.asarray(img), gt["components"])
 
-        # --- parse the ground-truth SPICE text into a Netlist object ---------
         truth: Netlist = Netlist.from_spice(gt["netlist_spice"])
 
-        # Difficulty = number of two-terminal electrical components in TRUTH.
-        # Ground symbols and junction dots are NOT netlist components (the
-        # Netlist object only stores things like resistors and voltage sources)
-        # so len(truth.components) is already the clean complexity measure.
         n_components: int = len(truth.components)
 
-        # --- check correctness via graph-isomorphism equivalence -------------
         is_correct: bool = circuit_equivalent(extracted, truth)
 
         if is_correct:
             total_correct += 1
 
-        # --- accumulate by-template stats ------------------------------------
         if template_name not in by_template:
             by_template[template_name] = [0, 0]
-        by_template[template_name][1] += 1          # total
+        by_template[template_name][1] += 1
         if is_correct:
-            by_template[template_name][0] += 1       # correct
+            by_template[template_name][0] += 1
 
-        # --- accumulate by-component-count stats ----------------------------
         if n_components not in by_comp_count:
             by_comp_count[n_components] = [0, 0]
-        by_comp_count[n_components][1] += 1          # total
+        by_comp_count[n_components][1] += 1
         if is_correct:
-            by_comp_count[n_components][0] += 1      # correct
+            by_comp_count[n_components][0] += 1
 
-        # --- record failure details (capped at 20 to stay small) -------------
         if not is_correct and len(failures) < 20:
             failures.append({
                 "index": i,
@@ -129,7 +109,6 @@ def evaluate_extraction(count: int, seed: int = 0) -> dict:
                 "n_components": n_components,
             })
 
-    # Guard against zero-division if count == 0.
     accuracy = total_correct / count if count > 0 else 0.0
 
     return {
@@ -142,9 +121,6 @@ def evaluate_extraction(count: int, seed: int = 0) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Pretty-printer for the CLI report
-# ---------------------------------------------------------------------------
 
 def _print_report(result: dict) -> None:
     """Print a human-readable accuracy report to stdout."""
@@ -152,10 +128,8 @@ def _print_report(result: dict) -> None:
     correct = result["correct"]
     pct     = result["accuracy"] * 100.0
 
-    # Headline number — the metric we report.
     print(f"\nExtraction accuracy: {correct}/{total} = {pct:.1f}%")
 
-    # --- By-template table --------------------------------------------------
     print("\nBy template:")
     print(f"  {'Template':<22}  {'Correct':>7}  {'Total':>5}  {'Accuracy':>8}")
     print(f"  {'-'*22}  {'-'*7}  {'-'*5}  {'-'*8}")
@@ -163,7 +137,6 @@ def _print_report(result: dict) -> None:
         acc_str = f"{100.0*c/t:.1f}%" if t > 0 else "  n/a"
         print(f"  {tname:<22}  {c:>7}  {t:>5}  {acc_str:>8}")
 
-    # --- By-component-count table (difficulty curve) ------------------------
     print("\nBy circuit complexity (# components):")
     print(f"  {'# components':>12}  {'Correct':>7}  {'Total':>5}  {'Accuracy':>8}")
     print(f"  {'-'*12}  {'-'*7}  {'-'*5}  {'-'*8}")
@@ -172,7 +145,6 @@ def _print_report(result: dict) -> None:
         acc_str = f"{100.0*c/t:.1f}%" if t > 0 else "  n/a"
         print(f"  {n:>12}  {c:>7}  {t:>5}  {acc_str:>8}")
 
-    # --- First few failures (if any) ----------------------------------------
     if result["failures"]:
         print("\nFirst failures:")
         for f in result["failures"][:5]:
@@ -181,12 +153,9 @@ def _print_report(result: dict) -> None:
     else:
         print("\nNo failures.")
 
-    print()  # trailing blank line for readability
+    print()
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     """Parse arguments, run evaluation, and print a report."""

@@ -35,3 +35,7 @@ training/weights/
 
 # Local Claude Code config (machine-specific permission allowlist — not for the public repo)
 .claude/settings.local.json
+
+# Local-only working notes (never publish)
+PUBLISHING.md
+CLEANUP_TODO.md

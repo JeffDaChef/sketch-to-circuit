@@ -58,13 +58,12 @@ from solver.netlist import Netlist
 from vision.wire_extraction import extract_netlist
 
 
-# --- corruption functions (uint8 RGB in, uint8 RGB out) ----------------------
 
 def blur(image: np.ndarray, sigma: float, seed: int) -> np.ndarray:
     """Gaussian blur with standard deviation `sigma` pixels (deterministic)."""
     if sigma <= 0:
         return image
-    out = gaussian(image, sigma=sigma, channel_axis=-1)   # returns float in [0, 1]
+    out = gaussian(image, sigma=sigma, channel_axis=-1)
     return (out * 255.0).astype(np.uint8)
 
 
@@ -87,17 +86,17 @@ def speckle(image: np.ndarray, amount: float, seed: int) -> np.ndarray:
         return image
     field = np.random.default_rng(seed).random(image.shape[:2])
     out = image.copy()
-    out[field < amount / 2] = 0            # pepper
-    out[field > 1 - amount / 2] = 255      # salt
+    out[field < amount / 2] = 0
+    out[field > 1 - amount / 2] = 255
     return out
 
 
 @dataclass(frozen=True)
 class Corruption:
     name: str
-    fn: object                              # (image, severity, seed) -> image
-    levels: tuple[float, ...]               # severity values, levels[0] must be the clean case
-    label: str                              # for plot legend, includes units/range
+    fn: object
+    levels: tuple[float, ...]
+    label: str
 
 
 CORRUPTIONS = [
@@ -107,12 +106,11 @@ CORRUPTIONS = [
 ]
 
 
-# --- the base circuit set (rendered once, reused for every corruption) -------
 
 @dataclass
 class BaseCircuit:
     image: np.ndarray
-    components: list                        # ground-truth boxes (detector stand-in)
+    components: list
     truth: Netlist
     n_components: int
     seed: int
@@ -168,8 +166,6 @@ def _is_correct(base: BaseCircuit, image: np.ndarray, timeout: float = 8.0) -> b
             extracted = extract_netlist(image, base.components)
         return circuit_equivalent(extracted, base.truth)
     except Exception:
-        # A corrupted image can make a step (e.g. Otsu) fail or run away; that's a
-        # failure, not a study crash. We swallow it rather than aborting the sweep.
         return False
 
 
@@ -179,7 +175,6 @@ def score(bases: list[BaseCircuit], corruption: Corruption, severity: float) -> 
     return correct, len(bases)
 
 
-# --- the study ----------------------------------------------------------------
 
 def run_study(count: int = 80, seed: int = 0, bases: list[BaseCircuit] | None = None,
               corruptions: list[Corruption] | None = None) -> dict:
@@ -224,7 +219,7 @@ def save_plot(study: dict, path: str) -> None:
     for name, data in study.items():
         levels = data["levels"]
         span = levels[-1] - levels[0] or 1.0
-        rel = [(lv - levels[0]) / span for lv in levels]      # normalize 0..1 for a shared x-axis
+        rel = [(lv - levels[0]) / span for lv in levels]
         ax.plot(rel, data["accuracy"], marker="o", label=data["label"])
     ax.set_xlabel("relative corruption severity  (0 = clean, 1 = max)")
     ax.set_ylabel("extraction accuracy (%)")
@@ -260,7 +255,6 @@ def main() -> None:
     study = run_study(bases=bases)
     _print_study(study)
 
-    # The difficulty curve with teeth: accuracy by component count under moderate noise.
     sev = 45.0
     noise = next(c for c in CORRUPTIONS if c.name == "noise")
     print(f"\nAccuracy by circuit complexity under Gaussian noise σ={sev:g}:")

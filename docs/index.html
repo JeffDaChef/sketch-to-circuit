@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sketch-to-Circuit — hand-drawn schematics, solved from first principles</title>
-<meta name="description" content="A computer-vision and numerical-analysis pipeline that reads a hand-drawn circuit, rebuilds it as a netlist, and solves it with a from-scratch MNA engine — validated against ngspice and closed-form theory.">
+<title>Sketch-to-Circuit</title>
+<meta name="description" content="A project that reads a hand-drawn circuit from a photo, rebuilds it as a netlist, and solves it with a Modified Nodal Analysis engine written from scratch. Answers are checked against SPICE and against textbook formulas.">
 <style>
   :root{
     --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3340;
@@ -99,17 +99,19 @@
 
 <header class="hero">
   <div class="wrap">
-    <p class="eyebrow">Computer vision · Numerical analysis</p>
-    <h1>Hand-drawn circuits,<br>solved from first principles.</h1>
-    <p class="lede">A pipeline that reads a circuit sketched on paper, rebuilds it as a netlist,
-      and solves it with a Modified Nodal Analysis engine I wrote from scratch — then checks
-      every answer against industry-standard SPICE and closed-form theory.</p>
+    <p class="eyebrow">Computer vision and circuit simulation</p>
+    <h1>Reading hand-drawn circuits and solving them</h1>
+    <p class="lede">This is a project I built that takes a picture of a circuit drawn on paper,
+      works out what the components are and how they connect, and then solves the circuit with a
+      simulation engine I wrote myself. It also checks its own answers against SPICE and against
+      the standard textbook formulas.</p>
     <div class="flow">
-      📷 photo &nbsp;→&nbsp; <b>detect</b> &nbsp;→&nbsp; <b>trace wires</b> &nbsp;→&nbsp;
-      <b>netlist</b> &nbsp;→&nbsp; <b>solve</b> &nbsp;→&nbsp; voltages &amp; currents
+      It starts from a photo of the drawing, <b>finds the parts</b>, <b>traces the wires</b> into
+      connections, <b>builds a netlist</b>, and then <b>solves</b> for the node voltages and
+      branch currents.
     </div>
     <div class="btns">
-      <a class="btn primary" href="https://github.com/jeffdachef/sketch-to-circuit/blob/main/docs/paper.md">Read the technical paper →</a>
+      <a class="btn primary" href="https://github.com/jeffdachef/sketch-to-circuit/blob/main/docs/paper.md">Read the technical paper</a>
       <a class="btn ghost" href="https://github.com/jeffdachef/sketch-to-circuit">Browse the code</a>
     </div>
   </div>
@@ -118,154 +120,165 @@
 <div class="wrap">
 
   <div class="stats">
-    <div class="stat"><div class="n">200/200</div><div class="l">synthetic netlists recovered correctly</div></div>
-    <div class="stat"><div class="n">40 → 100%</div><div class="l">wire-extractor redesign (ablation)</div></div>
-    <div class="stat"><div class="n">4-mode</div><div class="l">DC · transient · nonlinear · AC solver</div></div>
+    <div class="stat"><div class="n">200/200</div><div class="l">synthetic circuits read back correctly</div></div>
+    <div class="stat"><div class="n">100%</div><div class="l">wire reader accuracy after a rebuild (it used to be 40%)</div></div>
+    <div class="stat"><div class="n">4 modes</div><div class="l">DC, transient, nonlinear, and AC in one solver</div></div>
     <div class="stat"><div class="n">211</div><div class="l">automated tests passing</div></div>
   </div>
 
   <section>
     <h2><span class="hash">01</span>How it works</h2>
-    <p class="sub">Five stages. Three are built and measured today; the trained detector is the
-      next milestone, and the live overlay follows it.</p>
+    <p class="sub">There are five stages. Three of them are built and tested today. The component
+      detector is the next thing I need to train, and the live overlay comes after that.</p>
     <div class="pipe">
       <div class="step">
         <div class="k">STAGE 1</div><h3>Detect</h3>
-        <p>A YOLO detector locates each component on the page.</p>
-        <span class="tag todo">scaffolded</span>
+        <p>A small neural network finds each component on the page.</p>
+        <span class="tag todo">not trained yet</span>
       </div>
       <div class="step">
         <div class="k">STAGE 2</div><h3>Trace wires</h3>
-        <p>Erase the parts, skeletonise the ink, walk it into a wire graph.</p>
-        <span class="tag done">built · 200/200</span>
+        <p>Erase the parts, thin the leftover ink down to single lines, then walk those lines into
+          a graph of connections.</p>
+        <span class="tag done">built, 200 of 200</span>
       </div>
       <div class="step">
         <div class="k">STAGE 3</div><h3>Netlist</h3>
-        <p>Match terminals to wire-ends → a machine-readable circuit.</p>
+        <p>Match each component's terminals to the cut wire ends, which gives a circuit the
+          computer can read.</p>
         <span class="tag done">built</span>
       </div>
       <div class="step">
         <div class="k">STAGE 4</div><h3>Solve</h3>
-        <p>From-scratch MNA engine: DC, transient, nonlinear, AC.</p>
-        <span class="tag done">built · validated</span>
+        <p>My own MNA engine. It handles DC, transient, nonlinear, and AC circuits.</p>
+        <span class="tag done">built and checked</span>
       </div>
       <div class="step pending">
         <div class="k">STAGE 5</div><h3>Overlay</h3>
-        <p>Project the solved voltages back onto the live image.</p>
-        <span class="tag todo">after detector</span>
+        <p>Draw the solved voltages back onto the live camera image.</p>
+        <span class="tag todo">comes after the detector</span>
       </div>
     </div>
   </section>
 
   <section>
-    <h2><span class="hash">02</span>One solver core, four modes</h2>
-    <p class="sub">Everything is built on a single trusted linear solve using companion models —
-      so there is only ever one piece of linear algebra to validate.</p>
+    <h2><span class="hash">02</span>The circuit solver</h2>
+    <p class="sub">Everything sits on top of one linear solve, using companion models, so there is
+      only one piece of math that actually has to be correct.</p>
     <div class="figs">
       <figure>
-        <img src="assets/rc_charging.png" alt="RC charging curve vs. analytic theory">
-        <figcaption><b>Transient.</b> Capacitors/inductors become a resistor + source each time
-          step. The RC curve matches the analytic <code>V(1−e^(−t/τ))</code> to within a hair.</figcaption>
+        <img src="assets/rc_charging.png" alt="RC charging curve compared with theory">
+        <figcaption><b>Transient response.</b> Each capacitor or inductor is replaced by a resistor
+          and a current source at every time step, so each instant becomes an ordinary DC circuit.
+          The charging curve lines up with the textbook RC formula.</figcaption>
       </figure>
       <figure>
         <img src="assets/rlc_ringing.png" alt="Underdamped RLC step response">
-        <figcaption><b>RLC ringing.</b> An underdamped series-RLC step response — overshoot and
-          decay, the dual companion model for inductors at work.</figcaption>
+        <figcaption><b>RLC ringing.</b> An underdamped series RLC circuit responding to a step
+          input. It overshoots and then rings down, which is the inductor model doing its job.</figcaption>
       </figure>
       <figure>
         <img src="assets/rectifier.png" alt="Half-wave rectifier with smoothing capacitor">
-        <figcaption><b>All three at once.</b> A half-wave rectifier with smoothing cap exercises
-          transient, nonlinear diodes, and a time-varying source in one simulation.</figcaption>
+        <figcaption><b>Three modes together.</b> A half wave rectifier with a smoothing capacitor.
+          This single run uses the transient, nonlinear, and time varying source parts of the
+          solver at the same time.</figcaption>
       </figure>
       <figure>
-        <img src="assets/bode_lowpass.png" alt="RC low-pass Bode plot vs closed form">
-        <figcaption><b>AC / frequency domain.</b> The same MNA core run with complex impedances.
-          The RC low-pass hits exactly −3 dB and −45° at its cutoff.</figcaption>
+        <img src="assets/bode_lowpass.png" alt="RC low-pass frequency response">
+        <figcaption><b>Frequency response.</b> The same engine run with complex numbers. The RC
+          low pass drops by 3 dB and shifts by 45 degrees at its cutoff, which is what the theory
+          predicts.</figcaption>
       </figure>
       <figure>
-        <img src="assets/bode_bandpass.png" alt="Series RLC band-pass Bode plot">
-        <figcaption><b>Band-pass.</b> A series-RLC band-pass peaks at <code>f₀ = 1/(2π√LC)</code>,
-          matching the closed-form result.</figcaption>
+        <img src="assets/bode_bandpass.png" alt="Series RLC band-pass response">
+        <figcaption><b>Band pass.</b> A series RLC band pass peaks at its resonant frequency
+          <code>f0 = 1/(2*pi*sqrt(LC))</code>, which matches the closed form result.</figcaption>
       </figure>
       <figure>
         <img src="assets/bode_diode_tunable.png" alt="Bias-tunable diode filter">
-        <figcaption><b>Small-signal AC.</b> Linearise a diode at its DC bias (the "26 mV/I" rule)
-          → a filter whose cutoff <em>tunes</em> with bias current, 10:1.</figcaption>
+        <figcaption><b>Bias tunable filter.</b> Setting a diode's bias current lets you treat it
+          as a resistor (the 26 mV over I rule). The filter cutoff then moves with the bias current
+          across a ten to one range.</figcaption>
       </figure>
     </div>
   </section>
 
   <section>
-    <h2><span class="hash">03</span>Measured, not asserted</h2>
-    <p class="sub">The vision half is measured by <b>graph isomorphism</b> — an extraction counts
-      as correct only if its netlist is electrically equivalent to ground truth.</p>
+    <h2><span class="hash">03</span>Accuracy and results</h2>
+    <p class="sub">An extraction only counts as correct when its netlist is the same circuit
+      electrically as the known answer. That check is done with <b>graph isomorphism</b>.</p>
     <div class="figs">
       <figure>
-        <img src="assets/extractor_ablation.png" alt="Extractor ablation: baseline vs redesign">
-        <figcaption><b>Ablation.</b> The first extractor was layout-overfit (40%). Rebuilding it
-          around a real wire graph took it to <span style="color:var(--good)">100%</span> with no
-          regressions — the kind of before/after number that shows real engineering.</figcaption>
+        <img src="assets/extractor_ablation.png" alt="Wire extractor before and after the rebuild">
+        <figcaption><b>The wire reader rebuild.</b> The first version was tied to the layouts it
+          was built on and scored about 40 percent. Rebuilding it around a real graph of the wires
+          brought it to <span style="color:var(--good)">100 percent</span>, and it did not break
+          any of the cases it already handled.</figcaption>
       </figure>
       <figure>
-        <img src="assets/difficulty_curve.png" alt="Accuracy vs circuit size">
-        <figcaption><b>Difficulty curve.</b> 100% up to ~10–12 components, then an honest
-          resolution-driven fall-off. Building this caught a benchmark artifact masquerading as a
-          limit — and fixed it.</figcaption>
+        <img src="assets/difficulty_curve.png" alt="Accuracy by circuit size">
+        <figcaption><b>Accuracy by circuit size.</b> It stays at 100 percent up to roughly 10 to 12
+          components, then falls off because the parts get too small at the fixed image size.
+          Building this also turned up a benchmark bug, which I tracked down and fixed.</figcaption>
       </figure>
       <figure>
-        <img src="assets/noise_robustness.png" alt="Accuracy vs image corruption severity">
-        <figcaption><b>Noise robustness.</b> Where it breaks: blur is tolerated, noise has a cliff,
-          and <b>speckle is the weak point</b> — a measured weakness that sets the Phase-2 to-do list.</figcaption>
+        <img src="assets/noise_robustness.png" alt="Accuracy as image quality gets worse">
+        <figcaption><b>Where it breaks down.</b> Blur is handled reasonably well, heavy noise
+          causes a sudden drop, and speckle is the worst case. The study tells me what image
+          cleanup to add next.</figcaption>
       </figure>
       <figure style="display:flex;flex-direction:column;justify-content:center;padding:18px">
         <table>
           <tr><th>Solver check</th><th>Result</th></tr>
-          <tr><td>RC at one τ</td><td>3.151 V <span style="color:var(--muted)">vs 3.16 V</span></td></tr>
-          <tr><td>Silicon diode op-point</td><td>0.693 V · 4.31 mA</td></tr>
-          <tr><td>LED op-point</td><td>1.805 V · 14.5 mA</td></tr>
-          <tr><td>RC low-pass @ cutoff</td><td>−3.00 dB · −45°</td></tr>
-          <tr><td>RLC band-pass peak</td><td>|H| = 1 @ f₀</td></tr>
+          <tr><td>RC at one time constant</td><td>3.151 V <span style="color:var(--muted)">vs 3.16 V</span></td></tr>
+          <tr><td>Silicon diode operating point</td><td>0.693 V, 4.31 mA</td></tr>
+          <tr><td>LED operating point</td><td>1.805 V, 14.5 mA</td></tr>
+          <tr><td>RC low pass at cutoff</td><td>-3.00 dB, -45 degrees</td></tr>
+          <tr><td>RLC band pass peak</td><td>gain of 1 at f0</td></tr>
         </table>
-        <figcaption style="padding:12px 2px 0"><b>Solver vs. theory.</b> Anchored to closed-form
-          formulas; an ngspice cross-check harness backs it further.</figcaption>
+        <figcaption style="padding:12px 2px 0"><b>The solver against theory.</b> The numbers from
+          my solver sit next to the textbook formulas. An ngspice cross check backs them up as
+          well.</figcaption>
       </figure>
     </div>
   </section>
 
   <section>
-    <h2><span class="hash">04</span>The honest part</h2>
-    <p class="sub">Reporting where it breaks is the point — it's the credibility centre of the project.</p>
+    <h2><span class="hash">04</span>What it cannot do yet</h2>
+    <p class="sub">These are the real limits at the moment, and I think it is worth writing them
+      down plainly.</p>
     <div class="callout">
-      <h3>What is <em>not</em> claimed yet</h3>
+      <h3>Things I am not claiming</h3>
       <ul>
-        <li><b>No real-photo results yet.</b> Everything here is on synthetic images I generate
-          and control. Reading photographs of my own handwriting needs the trained detector —
-          that's the next phase, and the headline claim isn't made until it's done.</li>
-        <li><b>Speckle &amp; lighting break the current preprocessing</b> — measured, not guessed
-          (see the noise curve). The fix (adaptive thresholding) is specified, not yet built.</li>
-        <li><b>The ngspice cross-check doesn't yet cover inductor circuits</b>; closed-form
-          anchors cover those in the meantime.</li>
+        <li><b>No results on real photos yet.</b> Everything here runs on synthetic images that I
+          generate. Reading photos of my own handwriting needs the trained detector, which is the
+          next phase, so I am not claiming that part works.</li>
+        <li><b>Speckle and uneven lighting break the current image cleanup.</b> I measured this in
+          the noise study. The fix is adaptive thresholding, which is planned but not built.</li>
+        <li><b>The ngspice cross check does not cover inductor circuits yet.</b> The textbook
+          formulas cover those cases for now.</li>
       </ul>
     </div>
   </section>
 
   <section>
-    <h2><span class="hash">05</span>Reproducible</h2>
-    <p class="sub">Every number and figure above regenerates from a clean checkout with one command.</p>
+    <h2><span class="hash">05</span>Reproducing the results</h2>
+    <p class="sub">Every number and figure on this page comes back from a clean copy of the repo
+      with one command.</p>
 <pre><span class="c"># exact pinned versions, fixed seeds, PYTHONHASHSEED=0</span>
 uv pip install -r requirements.txt
-./reproduce.sh   <span class="c"># tests + all metrics + demos + every figure</span></pre>
+./reproduce.sh   <span class="c"># tests, all metrics, demos, and every figure</span></pre>
   </section>
 
   <footer>
     <div class="note">
-      A solo project by Neel. The pipeline (solver + wire tracer) is pure Python — no paid APIs,
-      everything runs locally. Full write-up in the
-      <a href="https://github.com/jeffdachef/sketch-to-circuit/blob/main/docs/paper.md">technical paper</a>;
-      all code, tests, and reproduction steps on
+      A solo project by Neel. The solver and wire tracer are plain Python and run on a normal
+      computer with no paid services. The full write up is in the
+      <a href="https://github.com/jeffdachef/sketch-to-circuit/blob/main/docs/paper.md">technical paper</a>,
+      and the code and tests are on
       <a href="https://github.com/jeffdachef/sketch-to-circuit">GitHub</a>.
     </div>
-    Built with numpy · scipy · scikit-image · networkx · schemdraw. Validated against ngspice.
+    Built with numpy, scipy, scikit-image, networkx, and schemdraw, and checked against ngspice.
   </footer>
 
 </div>

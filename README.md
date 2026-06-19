@@ -6,6 +6,8 @@ software detects components, traces wires, builds a netlist, solves the circuit 
 from-scratch Modified Nodal Analysis (MNA) engine, and overlays the computed node
 voltages and branch currents back onto the live camera image.
 
+**📄 [Technical paper / write-up](docs/paper.md)** · **🌐 [Project website](https://neelch101.github.io/sketch-to-circuit/)**
+
 Full project spec: [`sketch_to_circuit_brief.md`](sketch_to_circuit_brief.md)
 Plain-English explanation of all the code: [`EXPLAINED.md`](EXPLAINED.md)
 Input drawing rules: [`docs/drawing_convention.md`](docs/drawing_convention.md)
@@ -40,7 +42,7 @@ and the solver demos; it writes `rc_charging.png`, `rectifier.png`,
 
 ## Status
 
-_(166 tests passing, 1 skipped — the live ngspice run, pending a one-time install.)_
+_(211 tests passing, 1 skipped — the live ngspice run, pending a one-time install.)_
 
 - [x] Project brief & plan
 - [x] **Phase 0:** synthetic pipeline — netlist + MNA solver + generator + end-to-end demo

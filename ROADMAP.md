@@ -152,7 +152,10 @@ project" from "this person does real work." Layer them on once the spine works:
   it handled. (Still to do once the detector exists: compare the from-scratch detector against
   off-the-shelf / published CGHD mAP.)
 - **Hosted / shareable demo.** A tiny web page or recorded pipeline that a stranger can try or
-  watch end-to-end — shows you can *ship*, not just prototype. (Low priority vs the above.)
+  watch end-to-end — shows you can *ship*, not just prototype. Note: most target schools don't
+  interview, which makes the *artifacts* (writeup, repo, site, honest demo) carry everything —
+  see [`docs/presentation_plan.md`](docs/presentation_plan.md) for the ranked plan and the rule
+  that a camera demo only comes *after* the detector (never staged).
 - **Reproducibility.** ✅ **Done.** Seeds fixed (every metric takes `--seed`), `requirements.txt`
   pinned to exact versions, and a one-command `./reproduce.sh` (with `PYTHONHASHSEED=0`)
   regenerates every number and figure. Quietly signals engineering discipline; also makes the

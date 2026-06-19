@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch-to-Circuit — hand-drawn schematics, solved from first principles</title>
+<meta name="description" content="A computer-vision and numerical-analysis pipeline that reads a hand-drawn circuit, rebuilds it as a netlist, and solves it with a from-scratch MNA engine — validated against ngspice and closed-form theory.">
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2230; --border:#2a3340;
+    --ink:#e6edf3; --muted:#9aa7b4; --accent:#4dd2c0; --accent2:#7aa2ff;
+    --good:#3fb950; --warn:#d29922;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;
+       -webkit-font-smoothing:antialiased}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px;margin:0 auto;padding:0 22px}
+  code{font-family:var(--mono);background:var(--panel2);border:1px solid var(--border);
+       border-radius:5px;padding:1px 6px;font-size:.88em}
+
+  /* hero */
+  header.hero{padding:80px 0 56px;border-bottom:1px solid var(--border);
+       background:radial-gradient(1100px 380px at 50% -120px,rgba(77,210,192,.10),transparent)}
+  .eyebrow{font-family:var(--mono);color:var(--accent);font-size:.8rem;letter-spacing:.16em;
+       text-transform:uppercase;margin:0 0 14px}
+  h1{font-size:clamp(2rem,5vw,3.1rem);line-height:1.1;margin:0 0 18px;letter-spacing:-.02em}
+  .lede{font-size:1.18rem;color:var(--muted);max-width:680px;margin:0 0 28px}
+  .flow{font-family:var(--mono);font-size:.92rem;color:var(--ink);background:var(--panel);
+       border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:inline-block;margin:0 0 30px}
+  .flow b{color:var(--accent)}
+  .btns{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:11px 20px;border-radius:9px;font-weight:600;font-size:.95rem}
+  .btn.primary{background:var(--accent);color:#04201b}
+  .btn.primary:hover{filter:brightness(1.08);text-decoration:none}
+  .btn.ghost{border:1px solid var(--border);color:var(--ink)}
+  .btn.ghost:hover{border-color:var(--accent2);text-decoration:none}
+
+  /* stat strip */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border);
+       border:1px solid var(--border);border-radius:12px;overflow:hidden;margin:44px 0}
+  .stat{background:var(--panel);padding:22px 16px;text-align:center}
+  .stat .n{font-size:1.7rem;font-weight:700;color:var(--accent)}
+  .stat .l{font-size:.82rem;color:var(--muted);margin-top:4px}
+  @media(max-width:680px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+  section{padding:46px 0;border-bottom:1px solid var(--border)}
+  h2{font-size:1.5rem;margin:0 0 6px;letter-spacing:-.01em}
+  h2 .hash{color:var(--accent);font-family:var(--mono);margin-right:10px;font-size:1rem}
+  .sub{color:var(--muted);margin:0 0 26px}
+
+  /* pipeline */
+  .pipe{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px}
+  .step .k{font-family:var(--mono);font-size:.72rem;color:var(--accent);letter-spacing:.1em}
+  .step h3{font-size:1rem;margin:8px 0 6px}
+  .step p{font-size:.85rem;color:var(--muted);margin:0}
+  .step.pending{border-style:dashed;opacity:.85}
+  .step .tag{font-size:.68rem;font-family:var(--mono);padding:2px 7px;border-radius:20px;
+       display:inline-block;margin-top:10px}
+  .tag.done{background:rgba(63,185,80,.14);color:var(--good)}
+  .tag.todo{background:rgba(210,153,34,.14);color:var(--warn)}
+  @media(max-width:760px){.pipe{grid-template-columns:repeat(2,1fr)}}
+
+  /* figures */
+  .figs{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:680px){.figs{grid-template-columns:1fr}}
+  figure{margin:0;background:var(--panel);border:1px solid var(--border);border-radius:12px;
+       overflow:hidden}
+  figure img{width:100%;display:block;background:#fff}
+  figcaption{padding:12px 14px;font-size:.85rem;color:var(--muted)}
+  figcaption b{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;font-size:.92rem;margin-top:8px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}
+  td .pos{color:var(--good);font-weight:600}
+
+  .callout{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--warn);
+       border-radius:10px;padding:18px 20px}
+  .callout h3{margin:0 0 10px;font-size:1.05rem;color:var(--warn)}
+  .callout ul{margin:0;padding-left:20px;color:var(--muted)}
+  .callout li{margin:7px 0}
+  .callout li b{color:var(--ink)}
+
+  pre{background:#0a0e14;border:1px solid var(--border);border-radius:10px;padding:16px;
+       overflow:auto;font-family:var(--mono);font-size:.85rem;color:var(--ink)}
+  pre .c{color:var(--muted)}
+
+  footer{padding:40px 0 60px;color:var(--muted);font-size:.88rem}
+  footer .note{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+       padding:14px 16px;margin-bottom:18px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Computer vision · Numerical analysis</p>
+    <h1>Hand-drawn circuits,<br>solved from first principles.</h1>
+    <p class="lede">A pipeline that reads a circuit sketched on paper, rebuilds it as a netlist,
+      and solves it with a Modified Nodal Analysis engine I wrote from scratch — then checks
+      every answer against industry-standard SPICE and closed-form theory.</p>
+    <div class="flow">
+      📷 photo &nbsp;→&nbsp; <b>detect</b> &nbsp;→&nbsp; <b>trace wires</b> &nbsp;→&nbsp;
+      <b>netlist</b> &nbsp;→&nbsp; <b>solve</b> &nbsp;→&nbsp; voltages &amp; currents
+    </div>
+    <div class="btns">
+      <a class="btn primary" href="https://github.com/neelch101/sketch-to-circuit/blob/main/docs/paper.md">Read the technical paper →</a>
+      <a class="btn ghost" href="https://github.com/neelch101/sketch-to-circuit">Browse the code</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="stats">
+    <div class="stat"><div class="n">200/200</div><div class="l">synthetic netlists recovered correctly</div></div>
+    <div class="stat"><div class="n">40 → 100%</div><div class="l">wire-extractor redesign (ablation)</div></div>
+    <div class="stat"><div class="n">4-mode</div><div class="l">DC · transient · nonlinear · AC solver</div></div>
+    <div class="stat"><div class="n">211</div><div class="l">automated tests passing</div></div>
+  </div>
+
+  <section>
+    <h2><span class="hash">01</span>How it works</h2>
+    <p class="sub">Five stages. Three are built and measured today; the trained detector is the
+      next milestone, and the live overlay follows it.</p>
+    <div class="pipe">
+      <div class="step">
+        <div class="k">STAGE 1</div><h3>Detect</h3>
+        <p>A YOLO detector locates each component on the page.</p>
+        <span class="tag todo">scaffolded</span>
+      </div>
+      <div class="step">
+        <div class="k">STAGE 2</div><h3>Trace wires</h3>
+        <p>Erase the parts, skeletonise the ink, walk it into a wire graph.</p>
+        <span class="tag done">built · 200/200</span>
+      </div>
+      <div class="step">
+        <div class="k">STAGE 3</div><h3>Netlist</h3>
+        <p>Match terminals to wire-ends → a machine-readable circuit.</p>
+        <span class="tag done">built</span>
+      </div>
+      <div class="step">
+        <div class="k">STAGE 4</div><h3>Solve</h3>
+        <p>From-scratch MNA engine: DC, transient, nonlinear, AC.</p>
+        <span class="tag done">built · validated</span>
+      </div>
+      <div class="step pending">
+        <div class="k">STAGE 5</div><h3>Overlay</h3>
+        <p>Project the solved voltages back onto the live image.</p>
+        <span class="tag todo">after detector</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="hash">02</span>One solver core, four modes</h2>
+    <p class="sub">Everything is built on a single trusted linear solve using companion models —
+      so there is only ever one piece of linear algebra to validate.</p>
+    <div class="figs">
+      <figure>
+        <img src="assets/rc_charging.png" alt="RC charging curve vs. analytic theory">
+        <figcaption><b>Transient.</b> Capacitors/inductors become a resistor + source each time
+          step. The RC curve matches the analytic <code>V(1−e^(−t/τ))</code> to within a hair.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/rlc_ringing.png" alt="Underdamped RLC step response">
+        <figcaption><b>RLC ringing.</b> An underdamped series-RLC step response — overshoot and
+          decay, the dual companion model for inductors at work.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/rectifier.png" alt="Half-wave rectifier with smoothing capacitor">
+        <figcaption><b>All three at once.</b> A half-wave rectifier with smoothing cap exercises
+          transient, nonlinear diodes, and a time-varying source in one simulation.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/bode_lowpass.png" alt="RC low-pass Bode plot vs closed form">
+        <figcaption><b>AC / frequency domain.</b> The same MNA core run with complex impedances.
+          The RC low-pass hits exactly −3 dB and −45° at its cutoff.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/bode_bandpass.png" alt="Series RLC band-pass Bode plot">
+        <figcaption><b>Band-pass.</b> A series-RLC band-pass peaks at <code>f₀ = 1/(2π√LC)</code>,
+          matching the closed-form result.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/bode_diode_tunable.png" alt="Bias-tunable diode filter">
+        <figcaption><b>Small-signal AC.</b> Linearise a diode at its DC bias (the "26 mV/I" rule)
+          → a filter whose cutoff <em>tunes</em> with bias current, 10:1.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="hash">03</span>Measured, not asserted</h2>
+    <p class="sub">The vision half is measured by <b>graph isomorphism</b> — an extraction counts
+      as correct only if its netlist is electrically equivalent to ground truth.</p>
+    <div class="figs">
+      <figure>
+        <img src="assets/extractor_ablation.png" alt="Extractor ablation: baseline vs redesign">
+        <figcaption><b>Ablation.</b> The first extractor was layout-overfit (40%). Rebuilding it
+          around a real wire graph took it to <span style="color:var(--good)">100%</span> with no
+          regressions — the kind of before/after number that shows real engineering.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/difficulty_curve.png" alt="Accuracy vs circuit size">
+        <figcaption><b>Difficulty curve.</b> 100% up to ~10–12 components, then an honest
+          resolution-driven fall-off. Building this caught a benchmark artifact masquerading as a
+          limit — and fixed it.</figcaption>
+      </figure>
+      <figure>
+        <img src="assets/noise_robustness.png" alt="Accuracy vs image corruption severity">
+        <figcaption><b>Noise robustness.</b> Where it breaks: blur is tolerated, noise has a cliff,
+          and <b>speckle is the weak point</b> — a measured weakness that sets the Phase-2 to-do list.</figcaption>
+      </figure>
+      <figure style="display:flex;flex-direction:column;justify-content:center;padding:18px">
+        <table>
+          <tr><th>Solver check</th><th>Result</th></tr>
+          <tr><td>RC at one τ</td><td>3.151 V <span style="color:var(--muted)">vs 3.16 V</span></td></tr>
+          <tr><td>Silicon diode op-point</td><td>0.693 V · 4.31 mA</td></tr>
+          <tr><td>LED op-point</td><td>1.805 V · 14.5 mA</td></tr>
+          <tr><td>RC low-pass @ cutoff</td><td>−3.00 dB · −45°</td></tr>
+          <tr><td>RLC band-pass peak</td><td>|H| = 1 @ f₀</td></tr>
+        </table>
+        <figcaption style="padding:12px 2px 0"><b>Solver vs. theory.</b> Anchored to closed-form
+          formulas; an ngspice cross-check harness backs it further.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="hash">04</span>The honest part</h2>
+    <p class="sub">Reporting where it breaks is the point — it's the credibility centre of the project.</p>
+    <div class="callout">
+      <h3>What is <em>not</em> claimed yet</h3>
+      <ul>
+        <li><b>No real-photo results yet.</b> Everything here is on synthetic images I generate
+          and control. Reading photographs of my own handwriting needs the trained detector —
+          that's the next phase, and the headline claim isn't made until it's done.</li>
+        <li><b>Speckle &amp; lighting break the current preprocessing</b> — measured, not guessed
+          (see the noise curve). The fix (adaptive thresholding) is specified, not yet built.</li>
+        <li><b>The ngspice cross-check doesn't yet cover inductor circuits</b>; closed-form
+          anchors cover those in the meantime.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="hash">05</span>Reproducible</h2>
+    <p class="sub">Every number and figure above regenerates from a clean checkout with one command.</p>
+<pre><span class="c"># exact pinned versions, fixed seeds, PYTHONHASHSEED=0</span>
+uv pip install -r requirements.txt
+./reproduce.sh   <span class="c"># tests + all metrics + demos + every figure</span></pre>
+  </section>
+
+  <footer>
+    <div class="note">
+      A solo project by Neel. The pipeline (solver + wire tracer) is pure Python — no paid APIs,
+      everything runs locally. Full write-up in the
+      <a href="https://github.com/neelch101/sketch-to-circuit/blob/main/docs/paper.md">technical paper</a>;
+      all code, tests, and reproduction steps on
+      <a href="https://github.com/neelch101/sketch-to-circuit">GitHub</a>.
+    </div>
+    Built with numpy · scipy · scikit-image · networkx · schemdraw. Validated against ngspice.
+  </footer>
+
+</div>
+</body>
+</html>

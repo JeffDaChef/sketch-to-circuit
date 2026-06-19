@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(.venv/bin/python data_collection/synthetic.py --count 6 --out synth_out)",
-      "Bash(.venv/bin/python *)"
-    ]
-  }
-}

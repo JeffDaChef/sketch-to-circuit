@@ -47,8 +47,6 @@ def render(d, boxed):
                              fig, ax, width_px, height_px)
         comps.append({"name": name, "kind": kind, "value": value, "bbox": px})
 
-    # Text labels too — same reason as in generate_one: the pipeline erases
-    # detected text before tracing wires.
     to_fraction = fig.transFigure.inverted()
     for i, artist in enumerate(ax.texts):
         ext = artist.get_window_extent(renderer=fig.canvas.get_renderer())
@@ -81,7 +79,7 @@ def crossover_circuit(rng: random.Random | None = None):
     failure. `rng` (optional) jitters the whole drawing so a suite gets variety.
     """
     rng = rng or random.Random(0)
-    ox, oy = rng.randint(-12, 12), rng.randint(-12, 12)        # global translation jitter
+    ox, oy = rng.randint(-12, 12), rng.randint(-12, 12)
     va, vb = rng.choice(RESISTOR_VALUES), rng.choice(RESISTOR_VALUES)
     volts = rng.choice(SOURCE_VOLTAGES)
 
@@ -93,16 +91,12 @@ def crossover_circuit(rng: random.Random | None = None):
     def vseg(x, y0, y1, t=2):
         img[min(y0, y1):max(y0, y1) + 1, x - t:x + t + 1] = 0
 
-    # All coordinates are shifted by the (ox, oy) jitter via these helpers.
     def hx(y, x0, x1): hseg(y + oy, x0 + ox, x1 + ox)
     def vx(x, y0, y1): vseg(x + ox, y0 + oy, y1 + oy)
     def box(x0, y0, x1, y1): return [x0 + ox, y0 + oy, x1 + ox, y1 + oy]
 
-    # net n1: rail + riser + source/R1 stubs
     hx(240, 90, 330); vx(330, 120, 240); vx(90, 240, 260); hx(120, 310, 330)
-    # net n2: R1 stub + the vertical wire that crosses the n1 rail at (210, 240)
     hx(120, 210, 230); vx(210, 120, 300)
-    # net 0: source foot + bottom rail + R2 foot
     vx(90, 360, 400); hx(400, 90, 210); vx(210, 380, 400)
 
     components = [
@@ -155,8 +149,8 @@ def make_corner_chain(rng: random.Random):
         netlist.add("R", f"R{idx}", val, prev, nxt)
         boxed.append((r, "resistor", f"R{idx}", val))
         prev, idx = nxt, idx + 1
-    d += elm.Line().tox(src.start)          # rail LEFT along the chain's bottom
-    d += elm.Line().toy(src.start)          # then UP to the source's foot
+    d += elm.Line().tox(src.start)
+    d += elm.Line().toy(src.start)
     gnd = elm.Ground().at(src.start)
     d += gnd
     boxed.append((gnd, "ground", "GND", None))

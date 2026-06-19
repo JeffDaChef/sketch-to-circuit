@@ -74,32 +74,20 @@ from skimage.morphology import skeletonize
 from solver.netlist import GROUND, KINDS, Netlist
 from vision.skeleton_graph import build_skeleton_graph
 
-# ---------------------------------------------------------------------------
-# Kind mapping: human-readable component name -> SPICE one-letter code.
-# "ground" and "junction" are NOT circuit components; they get special
-# treatment (ground marks net "0"; junctions merge nearby terminals).
-# Anything else (e.g. "text") is erased from the image but produces nothing.
-# ---------------------------------------------------------------------------
 KIND_MAP: dict[str, str] = {
     "resistor":       "R",
     "voltage source": "V",
     "capacitor":      "C",
     "diode":          "D",
-    # "switch" would be "S" but Netlist.KINDS doesn't include it yet.
 }
 
-_SUPPORTED_KINDS = set(KINDS.keys())   # {"R", "C", "V", "I", "D"}
+_SUPPORTED_KINDS = set(KINDS.keys())
 
-# Placeholder values written into the netlist (ignored by the equivalence
-# check; value READING is a separate, later module).
 _PLACEHOLDERS: dict[str, str] = {
     "R": "1k", "V": "1", "C": "1u", "I": "1m", "D": "1",
 }
 
 
-# ---------------------------------------------------------------------------
-# Union-Find (path-compressed)
-# ---------------------------------------------------------------------------
 
 class _UF:
     """Minimal union-find with path compression."""
@@ -120,9 +108,6 @@ class _UF:
             self._parent[px] = py
 
 
-# ---------------------------------------------------------------------------
-# Image-level helpers
-# ---------------------------------------------------------------------------
 
 def _to_ink_mask(image: np.ndarray) -> np.ndarray:
     """Boolean mask, True where ink is (ink = darker than Otsu threshold)."""
@@ -167,7 +152,7 @@ def _region_map(shape: tuple[int, int], components: list[dict],
     mask = np.zeros((h, w), dtype=bool)
     for comp in components:
         if comp["kind"] == "crossover":
-            continue                      # not a component; see _erase_components
+            continue
         xmin, ymin, xmax, ymax = comp["bbox"]
         r0, r1 = max(0, int(ymin) - margin), min(h, int(ymax) + margin)
         c0, c1 = max(0, int(xmin) - margin), min(w, int(xmax) + margin)
@@ -191,9 +176,6 @@ def _regions_near(regions: np.ndarray, x: float, y: float,
     return set(int(v) for v in np.unique(vals) if v > 0)
 
 
-# ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
 
 def _terminal_points(bbox: list[float]) -> tuple[tuple[float, float],
                                                  tuple[float, float]]:
@@ -240,17 +222,13 @@ def _in_face_band(ep: tuple[float, float], bbox: list[float],
     return abs(x - face_x) <= radius and (ey0 - radius) <= y <= (ey1 + radius)
 
 
-# ---------------------------------------------------------------------------
-# Crossover threading (lifting the no-crossing-wires constraint)
-# ---------------------------------------------------------------------------
 
 def _point_in_bbox(pos: tuple[float, float], bbox: list[float], pad: float = 0.0) -> bool:
     x, y = pos
     return (bbox[0] - pad) <= x <= (bbox[2] + pad) and (bbox[1] - pad) <= y <= (bbox[3] + pad)
 
 
-_COLLINEAR_DOT = -0.5     # two edges count as "the same straight wire" if their
-                          # directions are >120° apart (dot product below this)
+_COLLINEAR_DOT = -0.5
 
 
 def _thread_cluster(graph: nx.MultiGraph, cluster: list[int]) -> bool:
@@ -275,8 +253,7 @@ def _thread_cluster(graph: nx.MultiGraph, cluster: list[int]) -> bool:
     cx = sum(p[0] for p in pts) / len(pts)
     cy = sum(p[1] for p in pts) / len(pts)
 
-    # Edges leaving the cluster (one endpoint inside, one outside).
-    external = []     # (other_node, length, pixels)
+    external = []
     for n in cluster:
         for _, other, _, data in graph.edges(n, keys=True, data=True):
             if other not in members:
@@ -296,7 +273,6 @@ def _thread_cluster(graph: nx.MultiGraph, cluster: list[int]) -> bool:
     rest.remove(j)
     pairs = [(0, j), (rest[0], rest[1])]
 
-    # Each pair must be genuinely opposite, or this isn't a pass-through crossing.
     for a, b in pairs:
         if dirs[a][0] * dirs[b][0] + dirs[a][1] * dirs[b][1] > _COLLINEAR_DOT:
             return False
@@ -330,9 +306,6 @@ def thread_crossovers(graph: nx.MultiGraph, crossovers: list[dict]) -> int:
     return threaded
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
 
 def extract_netlist(
     image: np.ndarray | Image.Image,
@@ -364,11 +337,6 @@ def extract_netlist(
         image = np.asarray(image)
     h, w = image.shape[:2]
 
-    # All matching distances scale with COMPONENT size, not image size: the
-    # geometry that matters (lead lengths, symbol spacing) is set by how big
-    # the circuit elements are drawn, and the same circuit can be rendered at
-    # many pixels-per-element. S = the median long side of the component
-    # boxes ~= one element's drawn length.
     sides = [max(c["bbox"][2] - c["bbox"][0], c["bbox"][3] - c["bbox"][1])
              for c in components if c["kind"] in KIND_MAP]
     scale = float(np.median(sides)) if sides else 0.1 * math.hypot(w, h)
@@ -376,31 +344,25 @@ def extract_netlist(
     if match_radius is None:
         match_radius = max(6, int(0.08 * scale))
 
-    _MARGIN = 4                                   # erase margin (px)
-    _JUNCTION_TOUCH = 5                           # junction-to-bbox contact (px)
-    _TT_CAP = max(40, int(0.35 * scale))          # touching-terminals cap
-    _TT_TIGHT = max(16, int(0.20 * scale))        # ...when one side has wire evidence
-    _RESCUE_CAP = max(80, int(0.60 * scale))      # region-rescue cap
+    _MARGIN = 4
+    _JUNCTION_TOUCH = 5
+    _TT_CAP = max(40, int(0.35 * scale))
+    _TT_TIGHT = max(16, int(0.20 * scale))
+    _RESCUE_CAP = max(80, int(0.60 * scale))
 
-    # --- steps 1-3: ink -> erased -> skeleton graph -----------------------
     ink = _to_ink_mask(image)
     wire_only = _erase_components(ink, components, _MARGIN)
     skel = skeletonize(wire_only)
     graph = build_skeleton_graph(skel, prune_len=4)
     regions = _region_map((h, w), components, _MARGIN)
 
-    # Lift the no-crossing-wires constraint: where the detector marked a crossover,
-    # split the fused degree-4 node so the two wires stay separate nets. Done
-    # BEFORE connected-components, which is what turns the graph into nets.
     thread_crossovers(graph, [c for c in components if c["kind"] == "crossover"])
 
-    # Each connected piece of the skeleton graph is one candidate net.
     net_of_node: dict[int, int] = {}
     for net_id, nodes in enumerate(nx.connected_components(graph)):
         for n in nodes:
             net_of_node[n] = net_id
 
-    # All cut endpoints, with their net and nearby region(s).
     endpoints: list[dict] = []
     for n, data in graph.nodes(data=True):
         if data["kind"] != "endpoint":
@@ -412,7 +374,6 @@ def extract_netlist(
             "regions": _regions_near(regions, pos[0], pos[1]),
         })
 
-    # --- step 4: terminal records ------------------------------------------
     two_terminal = [c for c in components if c["kind"] in KIND_MAP]
     junctions = [c for c in components if c["kind"] == "junction"]
     gnd_symbols = [c for c in components if c["kind"] == "ground"]
@@ -422,7 +383,6 @@ def extract_netlist(
     def _net_key(net_id: int) -> str:
         return f"wire_{net_id}"
 
-    # One record per electrical terminal (2 per component, 1 per ground).
     records: list[dict] = []
     for comp in two_terminal:
         p0, p1 = _terminal_points(comp["bbox"])
@@ -445,17 +405,12 @@ def extract_netlist(
     for rec in records:
         uf.find(rec["key"])
 
-    # --- step 5, rule (1): FACE BAND ---------------------------------------
-    # Endpoints lying along this terminal's face of the erased box, cut by the
-    # same region this component lives in: the wire attached right here.
     for rec in records:
         bbox = rec["comp"]["bbox"]
         for ep in endpoints:
             if not (rec["region"] & ep["regions"]):
                 continue
             if rec["side"] == "g":
-                # Ground has one lead but its symbol's orientation varies, so
-                # accept a cut anywhere snug around the box.
                 hit = _bbox_border_dist(ep["pos"][0], ep["pos"][1],
                                         bbox) <= _MARGIN + match_radius
             else:
@@ -465,10 +420,6 @@ def extract_netlist(
                 uf.union(rec["key"], _net_key(ep["net"]))
                 rec["claimed"] = True
 
-    # --- step 5, rule (2): JUNCTION DOTS ------------------------------------
-    # A junction dot's erasure cut the wires running through it; everything
-    # around the dot is one node: the cut endpoints, plus — for each component
-    # the dot touches — that component's nearest terminal.
     for junc in junctions:
         jb = junc["bbox"]
         jc = ((jb[0] + jb[2]) / 2.0, (jb[1] + jb[3]) / 2.0)
@@ -478,7 +429,6 @@ def extract_netlist(
             if _bbox_border_dist(ep["pos"][0], ep["pos"][1],
                                  jb) <= _MARGIN + match_radius:
                 uf.union(jkey, _net_key(ep["net"]))
-        # Nearest terminal of each touching component joins the junction node.
         by_comp: dict[str, list[dict]] = {}
         for rec in records:
             by_comp.setdefault(rec["comp"]["name"], []).append(rec)
@@ -490,23 +440,13 @@ def extract_netlist(
                 uf.union(jkey, nearest["key"])
                 nearest["on_junction"] = True
 
-    # --- step 5, rule (3): TOUCHING TERMINALS -------------------------------
-    # Two terminals of different components, close together inside one merged
-    # region: their joining wire was swallowed by the erasure, so adjacency IS
-    # the connection evidence.  Two tiers:
-    #   * both still unresolved -> connect within the normal cap;
-    #   * one already wire-matched -> connect only at TIGHT range (2x match
-    #     radius): terminals that practically touch are connected no matter
-    #     what, but a resolved terminal shouldn't pull in merely-nearby ones.
-    #     (Found by poking: a ground symbol pressed against a source's foot
-    #     must inherit its net even after the source matched a wire.)
     open_recs = [r for r in records if not r["on_junction"]]
     for i, a in enumerate(open_recs):
         for b in open_recs[i + 1:]:
             if a["comp"]["name"] == b["comp"]["name"]:
-                continue                      # never short one component
+                continue
             if a["claimed"] and b["claimed"]:
-                continue                      # both already have wire evidence
+                continue
             if not (a["region"] & b["region"]):
                 continue
             d = math.hypot(a["point"][0] - b["point"][0],
@@ -517,10 +457,6 @@ def extract_netlist(
                 uf.union(a["key"], b["key"])
                 a["touch_matched"] = b["touch_matched"] = True
 
-    # --- step 5, rule (4): REGION RESCUE ------------------------------------
-    # A terminal with no wire evidence and no junction takes the single
-    # nearest endpoint of its own region, within a generous cap.  Region-
-    # scoped + endpoints-only keeps this from grabbing a passing rail.
     for rec in records:
         if rec["claimed"] or rec["on_junction"]:
             continue
@@ -536,7 +472,6 @@ def extract_netlist(
             uf.union(rec["key"], _net_key(best["net"]))
             rec["claimed"] = True
 
-    # --- step 6: name nets, ground last, build the Netlist ------------------
     gnd_roots = {uf.find(f"term_{g['name']}_g") for g in gnd_symbols}
 
     net_names: dict[str, str] = {}
@@ -566,11 +501,11 @@ def extract_netlist(
     if debug:
         labeled, _ = nd_label(skel, structure=np.ones((3, 3), dtype=int))
         info: dict[str, Any] = {
-            "labeled": labeled,            # skeleton pixels by connected wire
-            "graph": graph,                # the full skeleton graph
-            "endpoints": endpoints,        # cut points with nets + regions
-            "regions": regions,            # erased-rectangle region labels
-            "records": records,            # per-terminal matching outcomes
+            "labeled": labeled,
+            "graph": graph,
+            "endpoints": endpoints,
+            "regions": regions,
+            "records": records,
             "terminal_nets": terminal_nets,
             "match_radius": match_radius,
             "erase_margin": _MARGIN,

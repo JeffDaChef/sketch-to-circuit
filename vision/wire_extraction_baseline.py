@@ -60,26 +60,15 @@ from skimage.morphology import skeletonize
 
 from solver.netlist import GROUND, KINDS, Netlist
 
-# ---------------------------------------------------------------------------
-# Kind mapping: human-readable component name -> SPICE one-letter code.
-#
-# "ground" and "junction" are NOT circuit components; they get special
-# treatment (ground marks net "0"; junctions merge nearby terminals).
-# ---------------------------------------------------------------------------
 KIND_MAP: dict[str, str] = {
     "resistor":       "R",
     "voltage source": "V",
     "capacitor":      "C",
     "diode":          "D",
-    # "switch" would be "S" but Netlist.KINDS doesn't include it yet;
-    # add it here if KINDS is extended:
-    # "switch": "S",
 }
 
-# Only the codes that Netlist.add() actually accepts.
-_SUPPORTED_KINDS = set(KINDS.keys())   # {"R", "C", "V", "I", "D"}
+_SUPPORTED_KINDS = set(KINDS.keys())
 
-# Placeholder values written into the netlist (ignored by equivalence check).
 _PLACEHOLDERS: dict[str, str] = {
     "R": "1k",
     "V": "1",
@@ -89,9 +78,6 @@ _PLACEHOLDERS: dict[str, str] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Union-Find (path-compressed)
-# ---------------------------------------------------------------------------
 
 class _UF:
     """Minimal union-find with path compression."""
@@ -103,7 +89,7 @@ class _UF:
         if x not in self._parent:
             self._parent[x] = x
         if self._parent[x] != x:
-            self._parent[x] = self.find(self._parent[x])  # path compression
+            self._parent[x] = self.find(self._parent[x])
         return self._parent[x]
 
     def union(self, x: str, y: str) -> None:
@@ -112,9 +98,6 @@ class _UF:
             self._parent[px] = py
 
 
-# ---------------------------------------------------------------------------
-# Step 1: Binarise
-# ---------------------------------------------------------------------------
 
 def _to_ink_mask(image: np.ndarray) -> np.ndarray:
     """Convert an HxW(x3) image to a boolean mask that is True where ink is.
@@ -123,20 +106,16 @@ def _to_ink_mask(image: np.ndarray) -> np.ndarray:
     mark pixels *below* it as ink.
     """
     if image.ndim == 3:
-        gray = rgb2gray(image)      # skimage returns float [0,1]
+        gray = rgb2gray(image)
     else:
-        # Already grayscale; normalise to [0,1] if needed.
         gray = image.astype(float)
         if gray.max() > 1.0:
             gray /= 255.0
 
-    thresh = threshold_otsu(gray)   # the natural split between paper and ink
-    return gray < thresh            # True = dark = ink
+    thresh = threshold_otsu(gray)
+    return gray < thresh
 
 
-# ---------------------------------------------------------------------------
-# Step 2: Erase component bounding boxes
-# ---------------------------------------------------------------------------
 
 def _erase_components(ink: np.ndarray,
                       components: list[dict],
@@ -154,7 +133,6 @@ def _erase_components(ink: np.ndarray,
 
     for comp in components:
         xmin, ymin, xmax, ymax = comp["bbox"]
-        # Convert to int and clamp to image bounds.
         r0 = max(0, int(ymin) - margin)
         r1 = min(h, int(ymax) + margin)
         c0 = max(0, int(xmin) - margin)
@@ -164,9 +142,6 @@ def _erase_components(ink: np.ndarray,
     return erased
 
 
-# ---------------------------------------------------------------------------
-# Step 3: Skeletonise and label wire blobs
-# ---------------------------------------------------------------------------
 
 def _skeletonise_and_label(wire_mask: np.ndarray) -> tuple[np.ndarray, int]:
     """Thin wire mask to 1-pixel skeleton, then label connected components.
@@ -177,15 +152,11 @@ def _skeletonise_and_label(wire_mask: np.ndarray) -> tuple[np.ndarray, int]:
     """
     skeleton = skeletonize(wire_mask)
 
-    # 8-connectivity structuring element.
     structure = np.ones((3, 3), dtype=int)
     labeled, n_blobs = nd_label(skeleton, structure=structure)
     return labeled, n_blobs
 
 
-# ---------------------------------------------------------------------------
-# Step 4: Terminal probing
-# ---------------------------------------------------------------------------
 
 def _corner_probes(bbox: list[float],
                    margin: int) -> tuple[list[tuple], list[tuple]]:
@@ -208,15 +179,12 @@ def _corner_probes(bbox: list[float],
     cx = (xmin + xmax) / 2.0
     cy = (ymin + ymax) / 2.0
 
-    # Expand by the erase margin so probes sit outside the erased region.
     ex0 = xmin - margin
     ex1 = xmax + margin
     ey0 = ymin - margin
     ey1 = ymax + margin
 
-    # Probes on the "top" face of the erased box.
     top_probes = [(ex0, ey0), (ex1, ey0), (cx, ey0)]
-    # Probes on the "bottom" face of the erased box.
     bot_probes = [(ex0, ey1), (ex1, ey1), (cx, ey1)]
 
     return top_probes, bot_probes
@@ -248,9 +216,6 @@ def _find_all_blobs(probes: list[tuple],
     return found
 
 
-# ---------------------------------------------------------------------------
-# Step 5: Junction merging and ground proximity fallback
-# ---------------------------------------------------------------------------
 
 def _bbox_border_dist(px: float, py: float, bbox: list[float]) -> float:
     """Signed distance from point (px,py) to the nearest edge of bbox.
@@ -267,12 +232,10 @@ def _bbox_border_dist(px: float, py: float, bbox: list[float]) -> float:
     inside_y = ymin <= py <= ymax
 
     if inside_x and inside_y:
-        # Distance to nearest edge (negative = inside).
         dx = min(px - xmin, xmax - px)
         dy = min(py - ymin, ymax - py)
         return -min(dx, dy)
 
-    # Outside: Euclidean distance to the nearest point on the border.
     nearest_x = max(xmin, min(xmax, px))
     nearest_y = max(ymin, min(ymax, py))
     return math.hypot(px - nearest_x, py - nearest_y)
@@ -287,9 +250,6 @@ def _x_ranges_overlap(bbox1: list[float],
     return hi > lo
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
 
 def extract_netlist(
     image: np.ndarray | Image.Image,
@@ -325,79 +285,49 @@ def extract_netlist(
     A Netlist (or a (Netlist, dict) pair when debug=True).
     """
 
-    # --- normalise image input -------------------------------------------
     if isinstance(image, Image.Image):
         image = np.asarray(image)
 
     h, w = image.shape[:2]
 
-    # Default match_radius: ~1% of the diagonal, minimum 6 pixels.
     if match_radius is None:
         diag = math.hypot(w, h)
         match_radius = max(6, int(0.01 * diag))
 
-    # Erase margin: 4 pixels beyond each side of the bbox.
-    # Must be ≥ 1 to fully remove component terminal stubs but small enough
-    # not to eat the wire segment just outside the box.
     _ERASE_MARGIN = 4
 
-    # A junction is considered "touching" a component if its centre is within
-    # this many pixels of the component's bbox border (or inside it).
     _JUNCTION_THRESHOLD = 5
 
-    # GND uses a larger search radius because parallel-bank ground symbols
-    # can be ~35 pixels away from the nearest wire fragment after erasure.
     _GND_RADIUS = 40
 
-    # ------------------------------------------------------------------
-    # Step 1 — binarise
-    # ------------------------------------------------------------------
     ink = _to_ink_mask(image)
 
-    # ------------------------------------------------------------------
-    # Step 2 — erase all component boxes
-    # ------------------------------------------------------------------
     wire_only = _erase_components(ink, components, _ERASE_MARGIN)
 
-    # ------------------------------------------------------------------
-    # Step 3 — skeletonise + label wire blobs
-    # ------------------------------------------------------------------
     labeled, _n_blobs = _skeletonise_and_label(wire_only)
 
-    # Build a (N,2) array of skeleton pixel coordinates (x, y) for fast
-    # distance computations.
     skel_ys, skel_xs = np.where(labeled > 0)
     if skel_xs.size > 0:
         skel_pts = np.stack([skel_xs, skel_ys], axis=1).astype(np.float32)
     else:
         skel_pts = np.empty((0, 2), dtype=np.float32)
 
-    # ------------------------------------------------------------------
-    # Separate components by role
-    # ------------------------------------------------------------------
     two_terminal = [c for c in components
                     if c["kind"] not in ("junction", "ground")]
     junctions    = [c for c in components if c["kind"] == "junction"]
     gnd_symbols  = [c for c in components if c["kind"] == "ground"]
 
-    # ------------------------------------------------------------------
-    # Step 6 — union-find
-    # ------------------------------------------------------------------
     uf = _UF()
 
-    # dict mapping (comp_name, "t0"/"t1") -> a canonical union-find key.
     terminal_key: dict[tuple[str, str], str] = {}
 
-    _float_id = [0]   # counter for terminals that find no wire blob
+    _float_id = [0]
 
     def _new_float() -> str:
         fid = f"float_{_float_id[0]}"
         _float_id[0] += 1
         return fid
 
-    # --- 6a. Locate the ground net (the GND symbol's terminal) ----------
-    # We probe with the larger GND radius because the ground symbol can sit
-    # a few dozen pixels away from the nearest surviving wire fragment.
     gnd_node: str | None = None
     for gnd in gnd_symbols:
         bbox = gnd["bbox"]
@@ -405,11 +335,11 @@ def extract_netlist(
         cx = (xmin + xmax) / 2.0
         cy = (ymin + ymax) / 2.0
         gnd_probes = [
-            (cx,                     ymin - _ERASE_MARGIN),  # top edge centre
-            (xmax + _ERASE_MARGIN,   cy),                    # right edge centre
-            (xmin - _ERASE_MARGIN,   cy),                    # left edge centre
-            (xmin - _ERASE_MARGIN,   ymin - _ERASE_MARGIN),  # top-left corner
-            (xmax + _ERASE_MARGIN,   ymin - _ERASE_MARGIN),  # top-right corner
+            (cx,                     ymin - _ERASE_MARGIN),
+            (xmax + _ERASE_MARGIN,   cy),
+            (xmin - _ERASE_MARGIN,   cy),
+            (xmin - _ERASE_MARGIN,   ymin - _ERASE_MARGIN),
+            (xmax + _ERASE_MARGIN,   ymin - _ERASE_MARGIN),
         ]
         blobs = _find_all_blobs(gnd_probes, skel_pts, labeled, _GND_RADIUS)
         if blobs:
@@ -420,7 +350,6 @@ def extract_netlist(
             gnd_node = _new_float()
         uf.find(gnd_node)
 
-    # --- 6b. Assign each 2-terminal component's terminals ----------------
     for comp in two_terminal:
         bbox  = comp["bbox"]
         name  = comp["name"]
@@ -432,29 +361,18 @@ def extract_netlist(
         def _assign(blobs: set[int]) -> str:
             """Turn a set of blob IDs into a union-find key; apply fallbacks."""
             if blobs:
-                # Pick the smallest blob id as the canonical key for this group.
                 canonical = f"blob_{min(blobs)}"
                 all_b = [f"blob_{b}" for b in blobs]
-                # Union all blobs found at this terminal together — they are the
-                # same net (e.g. the two wire segments on either side of a rung
-                # in the parallel bank both connect to the same terminal).
                 for bk in all_b[1:]:
                     uf.union(all_b[0], bk)
                 uf.union(canonical, all_b[0])
                 return canonical
 
-            # No wire blob found directly.  Fall back to the ground net if this
-            # component's x-range overlaps the ground symbol's x-range — which
-            # happens in the series-divider layout where V1's negative terminal
-            # is electrically at ground but physically disconnected from the
-            # ground symbol in the pixel drawing.
             if gnd_node is not None:
                 if any(_x_ranges_overlap(bbox, g["bbox"], _ERASE_MARGIN)
                        for g in gnd_symbols):
                     return gnd_node
 
-            # Truly floating: give it a unique placeholder that will form its
-            # own net unless a junction merges it later.
             return _new_float()
 
         t0_key = _assign(t0_blobs)
@@ -464,61 +382,43 @@ def extract_netlist(
         uf.find(t0_key)
         uf.find(t1_key)
 
-    # --- 6c. Junction merging -------------------------------------------
-    # A junction dot marks a point where two or more components share the same
-    # electrical node.  We detect this by checking whether the junction's
-    # bounding-box centre is inside (or very close to the border of) each
-    # component's bounding box.  Components where the junction is in the top
-    # half connect via terminal-0; those where it is in the bottom half connect
-    # via terminal-1.
     for junc in junctions:
         jbbox = junc["bbox"]
         jcx   = (jbbox[0] + jbbox[2]) / 2.0
         jcy   = (jbbox[1] + jbbox[3]) / 2.0
 
-        # Collect all (comp, terminal_side) pairs that this junction touches.
         to_merge: list[str] = []
         for comp in two_terminal:
             dist = _bbox_border_dist(jcx, jcy, comp["bbox"])
             if dist <= _JUNCTION_THRESHOLD:
-                # Is the junction in the top half or bottom half of the component?
                 comp_cy = (comp["bbox"][1] + comp["bbox"][3]) / 2.0
                 t_side  = "t0" if jcy <= comp_cy else "t1"
                 to_merge.append(terminal_key[(comp["name"], t_side)])
 
-        # Union all collected terminals into one group.
         if len(to_merge) >= 2:
             for tk in to_merge[1:]:
                 uf.union(to_merge[0], tk)
 
-    # ------------------------------------------------------------------
-    # Step 7 — assign net names
-    # ------------------------------------------------------------------
     gnd_root = uf.find(gnd_node) if gnd_node is not None else None
 
-    net_names: dict[str, str] = {}   # uf-root -> net name
+    net_names: dict[str, str] = {}
     _net_counter = [0]
 
     def _get_net(key: str) -> str:
         root = uf.find(key)
         if root == gnd_root:
-            return GROUND              # "0"
+            return GROUND
         if root not in net_names:
             _net_counter[0] += 1
             net_names[root] = f"n{_net_counter[0]}"
         return net_names[root]
 
-    # ------------------------------------------------------------------
-    # Step 8 — build the Netlist
-    # ------------------------------------------------------------------
     result = Netlist()
     for comp in two_terminal:
         kind_code = KIND_MAP.get(comp["kind"])
         if kind_code is None:
-            continue          # unknown kind; skip rather than crash
+            continue
         if kind_code not in _SUPPORTED_KINDS:
-            # Netlist.add would reject this code; skip and note the limitation.
-            # (Currently "S" for switch is not in KINDS.)
             continue
 
         n0 = _get_net(terminal_key[(comp["name"], "t0")])
@@ -526,9 +426,6 @@ def extract_netlist(
         value = _PLACEHOLDERS.get(kind_code, "1")
         result.add(kind_code, comp["name"], value, n0, n1)
 
-    # ------------------------------------------------------------------
-    # Optional debug payload
-    # ------------------------------------------------------------------
     if debug:
         info: dict[str, Any] = {
             "labeled": labeled,

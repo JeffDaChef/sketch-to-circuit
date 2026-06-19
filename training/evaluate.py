@@ -62,7 +62,7 @@ def summarize_results(results) -> dict:
     truly-absent classes separately instead of printing a bogus number for them.
     """
     box = results.box
-    names = results.names                      # {class_id: name}
+    names = results.names
     present = [int(i) for i in box.ap_class_index]
     ap50 = box.ap50
     per_class = {names[cls_id]: float(ap50[pos]) for pos, cls_id in enumerate(present)}
@@ -76,9 +76,6 @@ def summarize_results(results) -> dict:
 
 
 def main() -> None:
-    # Import ultralytics lazily (inside main) so this module — and its pure
-    # summarize_results() — can be imported and unit-tested without the heavy
-    # GPU-side dependency installed.
     try:
         from ultralytics import YOLO
     except ImportError:
@@ -91,8 +88,6 @@ def main() -> None:
         description="Evaluate a trained YOLO detector on the circuit test split."
     )
 
-    # Path to the weights file produced by training. This is the "trained brain"
-    # of the detector — without it, we have nothing to evaluate.
     parser.add_argument(
         "--weights",
         type=str,
@@ -100,8 +95,6 @@ def main() -> None:
         help="Path to best.pt (or any YOLO .pt weights file).",
     )
 
-    # data.yaml tells the validator where the test images and labels live, and
-    # what the class names are. Must be the same file used during training.
     parser.add_argument(
         "--data",
         type=str,
@@ -109,8 +102,6 @@ def main() -> None:
         help="Path to the data.yaml file produced by cghd_prep.py.",
     )
 
-    # Must match the size used during training. Changing it can hurt accuracy
-    # because the model was trained to expect 640×640 inputs.
     parser.add_argument(
         "--imgsz",
         type=int,
@@ -118,8 +109,6 @@ def main() -> None:
         help="Input image size in pixels (must match training). Default 640.",
     )
 
-    # 'test' uses the held-out test split (never seen during training).
-    # You can pass 'val' to quickly check the validation split instead.
     parser.add_argument(
         "--split",
         type=str,
@@ -130,7 +119,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Sanity-check paths before loading the (possibly large) model.
     weights_path = Path(args.weights).resolve()
     if not weights_path.exists():
         print(f"\n[ERROR] Weights file not found: {weights_path}")
@@ -148,16 +136,12 @@ def main() -> None:
     print(f"[INFO] Evaluating on split: '{args.split}'")
     print(f"[INFO] Data config:          {data_path}\n")
 
-    # .val() runs the model over every image in the chosen split, computes
-    # predictions, compares them to the ground-truth labels, and returns a
-    # results object with all the metrics packed in.
     results = model.val(
         data=str(data_path),
         imgsz=args.imgsz,
         split=args.split,
     )
 
-    # --- Summarise + print -----------------------------------------------------
     print("\n" + "=" * 60)
     print(f"EVALUATION RESULTS  (split = {args.split})")
     print("=" * 60)
@@ -165,7 +149,6 @@ def main() -> None:
     try:
         summary = summarize_results(results)
     except AttributeError as exc:
-        # ultralytics occasionally restructures its results object between versions.
         print(f"[WARN] Could not read metrics ({exc}) — printing raw results:")
         print(results)
         return
@@ -173,8 +156,6 @@ def main() -> None:
     print(f"  mAP50      : {summary['map50']:.4f}   (boxes correct at ≥50% overlap)")
     print(f"  mAP50-95   : {summary['map50_95']:.4f}   (stricter benchmark — lower is normal)")
 
-    # Per-class mAP50 shows which component types the model struggles with. Only
-    # classes that actually appear in this split get a score (see summarize_results).
     print("\nPer-class mAP50 (classes present in this split):")
     print("-" * 40)
     for name, score in sorted(summary["per_class"].items()):

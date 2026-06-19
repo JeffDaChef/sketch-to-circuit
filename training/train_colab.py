@@ -30,8 +30,6 @@ import argparse
 import sys
 from pathlib import Path
 
-# Guard the ultralytics import so a missing install gives a friendly message
-# instead of a confusing ModuleNotFoundError stack trace.
 try:
     from ultralytics import YOLO
 except ImportError:
@@ -48,8 +46,6 @@ def main() -> None:
         description="Train a YOLO11-nano detector on the CGHD circuit dataset."
     )
 
-    # --data is the one thing we cannot guess: it is the path to the data.yaml
-    # file produced by cghd_prep.py that tells YOLO where the images and labels live.
     parser.add_argument(
         "--data",
         type=str,
@@ -57,9 +53,6 @@ def main() -> None:
         help="Path to the data.yaml file produced by cghd_prep.py.",
     )
 
-    # YOLO11-nano ('yolo11n.pt') is the lightest model in the YOLO11 family.
-    # It trains fast and is accurate enough for the 8-class circuit dataset.
-    # On first run ultralytics will auto-download the file (~2 MB).
     parser.add_argument(
         "--model",
         type=str,
@@ -67,9 +60,6 @@ def main() -> None:
         help="Starting checkpoint. Default is yolo11n.pt (YOLO11-nano pretrained on COCO).",
     )
 
-    # One epoch = one full pass through the training images. 100 is a good
-    # default for a small dataset; early stopping (--patience) will quit sooner
-    # if the model stops improving.
     parser.add_argument(
         "--epochs",
         type=int,
@@ -77,9 +67,6 @@ def main() -> None:
         help="Maximum number of training epochs (default 100).",
     )
 
-    # Image size: all images are resized to --imgsz × --imgsz squares before
-    # being fed to the network. 640 is the standard YOLO size; smaller (e.g. 320)
-    # trains faster but is less accurate on small components.
     parser.add_argument(
         "--imgsz",
         type=int,
@@ -87,8 +74,6 @@ def main() -> None:
         help="Input image size in pixels (square). Default 640.",
     )
 
-    # Batch size = how many images the GPU processes at once. 16 fits easily on
-    # a Colab T4. If you see an "out of memory" error, lower this to 8.
     parser.add_argument(
         "--batch",
         type=int,
@@ -96,8 +81,6 @@ def main() -> None:
         help="Number of images per training batch. Lower to 8 if you run out of GPU memory.",
     )
 
-    # Where YOLO writes its output folders. The full path will be
-    #   <project>/<name>/weights/best.pt
     parser.add_argument(
         "--project",
         type=str,
@@ -112,8 +95,6 @@ def main() -> None:
         help="Sub-folder name for this specific run. Default 'cghd_yolo11n'.",
     )
 
-    # Patience = how many epochs in a row with no improvement before training
-    # stops early. This saves time when the model has already converged.
     parser.add_argument(
         "--patience",
         type=int,
@@ -123,26 +104,18 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Resolve the data.yaml path so any relative path works from any working dir.
     data_path = Path(args.data).resolve()
     if not data_path.exists():
         print(f"\n[ERROR] data.yaml not found at: {data_path}")
         print("Did you run cghd_prep.py first?  python data_collection/cghd_prep.py --src <CGHD_folder> --out cghd_yolo")
         sys.exit(1)
 
-    # Load the starting weights. 'yolo11n.pt' was pretrained on COCO, so the
-    # network already knows basic visual features (edges, textures, shapes).
-    # Fine-tuning from this checkpoint is MUCH faster than training from scratch.
     print(f"\n[INFO] Loading model: {args.model}")
     model = YOLO(args.model)
 
     print(f"[INFO] Starting training — this will take ~1-2 hours on a Colab T4 GPU.")
     print(f"[INFO] Output will appear in:  {args.project}/{args.name}/\n")
 
-    # Call ultralytics' built-in training loop. It handles data loading,
-    # augmentation, loss computation, validation, and checkpointing automatically.
-    # plots=True saves accuracy/loss curves as PNG files in the run folder,
-    # which are handy for checking whether training went well.
     model.train(
         data=str(data_path),
         epochs=args.epochs,
@@ -152,10 +125,9 @@ def main() -> None:
         name=args.name,
         patience=args.patience,
         plots=True,
-        seed=0,            # reproducible training run (the drafter split is seeded too)
+        seed=0,
     )
 
-    # Tell the user exactly where to find the trained weights file.
     best_pt = Path(args.project) / args.name / "weights" / "best.pt"
     print("\n" + "=" * 60)
     print("TRAINING COMPLETE")

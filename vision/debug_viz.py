@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import matplotlib
 
-matplotlib.use("Agg")            # no window needed; we save straight to a file
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -48,7 +48,6 @@ def save_debug_image(image: np.ndarray, components: list[dict],
     fig, ax = plt.subplots(figsize=(w / 100, h / 100), dpi=100)
     ax.imshow(image, alpha=0.35)
 
-    # Erased regions — the rectangles the extractor blanked out.
     for comp in components:
         xmin, ymin, xmax, ymax = comp["bbox"]
         face = {"junction": "violet", "ground": "green",
@@ -57,30 +56,27 @@ def save_debug_image(image: np.ndarray, components: list[dict],
                                    fill=True, facecolor=face, alpha=0.15,
                                    edgecolor=face, linewidth=0.8))
 
-    # Skeleton wires, coloured by connected wire id.
     ys, xs = np.where(labeled > 0)
     if xs.size:
         ax.scatter(xs, ys, c=labeled[ys, xs], s=0.5, cmap="tab20")
 
-    # Cut endpoints — the evidence the matcher works from.
     for ep in info["endpoints"]:
         x, y = ep["pos"]
         ax.add_patch(plt.Circle((x, y), info["match_radius"],
                                 fill=False, color="red", linewidth=1.2))
 
-    # Terminals, labelled with their final net.
     for rec in info["records"]:
         x, y = rec["point"]
         comp_name = rec["comp"]["name"]
         net = info["terminal_nets"].get(f"{comp_name}_{rec['side']}", "0?")
         if rec["claimed"]:
-            colour = "tab:blue"               # matched to a cut wire endpoint
+            colour = "tab:blue"
         elif rec["on_junction"]:
-            colour = "purple"                 # connected through a junction dot
+            colour = "purple"
         elif rec.get("touch_matched"):
-            colour = "darkorange"             # connected by terminal adjacency
+            colour = "darkorange"
         else:
-            colour = "crimson"                # genuinely unresolved
+            colour = "crimson"
         ax.plot(x, y, "x", color=colour, markersize=8, markeredgewidth=2)
         ax.annotate(f"{comp_name}.{rec['side']}={net}", (x, y),
                     textcoords="offset points", xytext=(5, 5),

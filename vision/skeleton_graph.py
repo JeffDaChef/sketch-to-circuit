@@ -38,7 +38,6 @@ from __future__ import annotations
 import networkx as nx
 import numpy as np
 
-# Orthogonal and diagonal neighbour offsets, in (dx, dy) form.
 _ORTHO = ((-1, 0), (1, 0), (0, -1), (0, 1))
 _DIAG = ((-1, -1), (-1, 1), (1, -1), (1, 1))
 
@@ -61,7 +60,6 @@ def _neighbours(mask: np.ndarray, x: int, y: int) -> list[tuple[int, int]]:
         nx_, ny_ = x + dx, y + dy
         if not (0 <= nx_ < w and 0 <= ny_ < h and mask[ny_, nx_]):
             continue
-        # Shared orthogonal pixels between (x,y) and the diagonal (nx_,ny_).
         side_a = (0 <= x + dx < w) and mask[y, x + dx]
         side_b = (0 <= y + dy < h) and mask[y + dy, x]
         if not side_a and not side_b:
@@ -92,15 +90,14 @@ def build_skeleton_graph(mask: np.ndarray, prune_len: int = 4) -> nx.MultiGraph:
     ys, xs = np.where(mask)
     pixels = list(zip(xs.tolist(), ys.tolist()))
 
-    # --- classify every skeleton pixel by its reduced-adjacency degree -------
     nbr: dict[tuple[int, int], list[tuple[int, int]]] = {
         p: _neighbours(mask, p[0], p[1]) for p in pixels
     }
-    endpoint_px = [p for p in pixels if len(nbr[p]) <= 1]   # deg 0 = lone dot
+    endpoint_px = [p for p in pixels if len(nbr[p]) <= 1]
     branch_px = {p for p in pixels if len(nbr[p]) >= 3}
 
     g = nx.MultiGraph()
-    node_of: dict[tuple[int, int], int] = {}   # node pixel -> node id
+    node_of: dict[tuple[int, int], int] = {}
     next_id = [0]
 
     def _new_node(kind: str, pos: tuple[float, float]) -> int:
@@ -112,8 +109,6 @@ def build_skeleton_graph(mask: np.ndarray, prune_len: int = 4) -> nx.MultiGraph:
     for p in endpoint_px:
         node_of[p] = _new_node("endpoint", p)
 
-    # Merge ADJACENT branch pixels (plain 8-connectivity is fine here — we just
-    # want touching branch pixels to be one node) into single branch nodes.
     unvisited = set(branch_px)
     while unvisited:
         seed = unvisited.pop()
@@ -135,15 +130,12 @@ def build_skeleton_graph(mask: np.ndarray, prune_len: int = 4) -> nx.MultiGraph:
         for c in cluster:
             node_of[c] = nid
 
-    # --- walk edges: from each node pixel, follow degree-2 runs --------------
     visited_interior: set[tuple[int, int]] = set()
-    direct_seen: set[frozenset] = set()   # node-pixel pairs touching directly
+    direct_seen: set[frozenset] = set()
 
     for start_px, start_node in node_of.items():
         for q in nbr[start_px]:
             if q in node_of:
-                # Two node pixels touch directly: a zero-interior edge
-                # (e.g. an endpoint right next to a branch cluster).
                 key = frozenset((start_px, q))
                 if node_of[q] != start_node and key not in direct_seen:
                     direct_seen.add(key)
@@ -151,15 +143,12 @@ def build_skeleton_graph(mask: np.ndarray, prune_len: int = 4) -> nx.MultiGraph:
                 continue
             if q in visited_interior:
                 continue
-            # Walk the run of interior pixels until we hit another node pixel.
             path = [q]
             prev, cur = start_px, q
             while True:
                 visited_interior.add(cur)
                 nxt = [r for r in nbr[cur] if r != prev]
                 if not nxt:
-                    # Dead end without an endpoint node — only possible if the
-                    # tip pixel was itself classified interior; treat as endpoint.
                     tip = _new_node("endpoint", cur)
                     node_of[cur] = tip
                     g.add_edge(start_node, tip,
@@ -173,7 +162,6 @@ def build_skeleton_graph(mask: np.ndarray, prune_len: int = 4) -> nx.MultiGraph:
                 prev, cur = cur, step
                 path.append(cur)
 
-    # --- pure cycles: components with no node pixels at all ------------------
     leftovers = [p for p in pixels
                  if p not in node_of and p not in visited_interior]
     leftover_set = set(leftovers)
@@ -191,10 +179,6 @@ def build_skeleton_graph(mask: np.ndarray, prune_len: int = 4) -> nx.MultiGraph:
         nid = _new_node("loop", seed)
         g.add_edge(nid, nid, length=len(ring) - 1, pixels=ring[1:])
 
-    # --- graph-level spur pruning --------------------------------------------
-    # A whisker = an endpoint whose only edge is short AND whose far end is a
-    # different node that has other connections (so removal can't strand
-    # anything). Iterate to a fixpoint: pruning one whisker may expose another.
     if prune_len > 0:
         changed = True
         while changed:

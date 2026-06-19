@@ -46,3 +46,8 @@ Dependencies are pinned (`==`) and every metric takes a fixed `--seed`, so the r
 - [ ] Phase 4: LLM explain mode and what-if (the ngspice validation is already built)
 - [ ] Phase 5: domain adaptation on my own drawings
 - [ ] Phase 6: polish and demo video
+
+## License
+
+MIT. See [LICENSE](LICENSE). You are free to use, copy, and build on this, just keep the
+copyright notice.

@@ -131,13 +131,25 @@ This directly predicts the Phase-2 preprocessing to-do list: despeckle or denois
 
 ## 5. Limitations and honest failure modes
 
-Reporting these is the point. They are where the project earns its credibility.
+Reporting these is the point. They are where the project earns its credibility. The table
+below is the project's error taxonomy. Each row is a way the system fails or could fail, how
+often it happens, why it happens, and whether it is still open or already fixed.
 
-1. No real-photo results yet. Everything above is on synthetic images I generate. The trained detector (section 3.2) does not exist yet, so the headline "reads hand-drawn circuits" claim is validated only on clean, convention-following input. This is the honest ceiling on today's results.
-2. Speckle and lighting break the current preprocessing (section 4.4). The global Otsu threshold will struggle with photographed paper under uneven light. I measured this rather than guessing at it.
-3. Some early heuristics assumed the synthetic layout. The original ground-detection and junction rules baked in "components are vertical, ground is directly below." The skeleton-graph redesign removed those assumptions, but real photos will surface more.
-4. The ngspice cross-check does not yet cover inductor circuits, and the live comparison is gated on a one-time install. The closed-form anchors cover the inductor cases in the meantime.
-5. Crossing wires need the detector. The crossover-splitting logic works, but it depends on the detector emitting a `crossover` marker on real photographs, which loops back to point 1.
+| Failure mode | When it shows up | How often | Why it happens | Status |
+|---|---|---|---|---|
+| Real photographs | Any real photo of a drawing | Untested | The component detector is not trained yet, and the preprocessing is tuned for clean synthetic images | Open, and it is the next step |
+| Salt-pepper speckle | Printed or photographed paper with small specks | About 0.4 percent speckle already halves accuracy | The global Otsu threshold reads the specks as ink and corrupts the traced wires | Open, fix is adaptive thresholding |
+| Heavy image noise | Low quality or low light photos | Accuracy drops from 100 percent to about 20 percent past sigma around 45 | The single global threshold cannot separate ink from a noisy background | Open, fix is denoise preprocessing |
+| Large or dense circuits | More than about 10 to 12 components | Accuracy falls off above roughly 12 components | At the fixed image size the parts shrink below the limit the wire thinner can resolve | Open, fix is higher resolution or tiling |
+| Crossing wires with no marker | Two wires cross in a plus shape and the detector did not flag it | Deterministic, those two nets always merge | A four-way junction in the thinned image fuses the two separate nets | Open, needs the detector to emit a crossover box (the splitting logic is built) |
+| Inductor circuits in the ngspice check | Validating an RLC circuit against ngspice | Cannot run that check yet | The ngspice harness does not accept the L component yet | Open, the closed-form formulas cover these for now |
+| Layout-specific heuristics | Unusual layouts, before the redesign | Was 0 percent on some unseen layouts | The old ground and junction rules assumed vertical parts with ground below | Fixed by the skeleton-graph redesign, now 200/200 plus the unseen layouts |
+| Value labels over wires | Dense circuits where a label sits on top of the wiring | Collapsed one divider from 100 percent to 0 percent at eight components | The label ink was erased along with the component and cut the wire underneath | Fixed by moving the labels to the side |
+
+The first four rows are measured directly by the noise and difficulty studies, so see
+`noise_robustness.png` and `difficulty_curve.png` for the evidence. The last two rows are bugs I
+already found and fixed. They stay in the table because finding and fixing them is part of the
+story, and because the same kind of artifact can come back on real photos.
 
 ---
 
